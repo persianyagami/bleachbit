@@ -1,70 +1,154 @@
-# vim: ts=4:sw=4:expandtab
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 
 """
 Create cleaners from CleanerML (markup language)
 """
 
-import bleachbit
-from bleachbit.Action import ActionProvider
-from bleachbit import _
-from bleachbit.General import boolstr_to_bool, getText
-from bleachbit.FileUtilities import expand_glob_join, listdir
-from bleachbit import Cleaner
-
+# standard library
 import logging
 import os
 import sys
-import xml.dom.minidom
+import time
+import xml.etree.ElementTree
+
+# local import
+import bleachbit
+from bleachbit import IS_POSIX, IS_WINDOWS
+from bleachbit.Action import ActionProvider
+from bleachbit.FileUtilities import expand_glob_join, listdir
+from bleachbit.General import boolstr_to_bool
+from bleachbit.General import os_match as general_os_match
+from bleachbit.General import reject_xml_dtd
+from bleachbit.Language import get_text as _
+from bleachbit.PathUtils import is_world_writable, path_startswith
+from bleachbit import Cleaner
+if IS_WINDOWS:
+    from bleachbit.Windows import read_registry_key
 
 logger = logging.getLogger(__name__)
+
+# Longest a CleanerML load runs before yielding to the GUI main loop
+_YIELD_SECONDS = 0.05
+
+"""Actions blocked for untrusted (user-writable) cleaners.
+
+Deletion stays allowed, so blocking registry deletion too would buy nothing.
+"""
+UNTRUSTED_BLOCKED_COMMANDS = ('process', 'process.terminate')
+
+
+class _ETSimpleTextNode:
+
+    ELEMENT_NODE = 1
+    TEXT_NODE = 3
+
+    def __init__(self, data):
+        self.nodeType = self.TEXT_NODE
+        self.data = data
+
+
+class _ETSimpleElementNode:
+
+    ELEMENT_NODE = 1
+    TEXT_NODE = 3
+
+    def __init__(self, element):
+        self._element = element
+        self.nodeType = self.ELEMENT_NODE
+        self.nodeName = element.tag
+
+    def getAttribute(self, name):
+        return self._element.attrib.get(name, '')
+
+    def hasAttribute(self, name):
+        return name in self._element.attrib
+
+    @property
+    def childNodes(self):
+        nodes = []
+        if self._element.text:
+            nodes.append(_ETSimpleTextNode(self._element.text))
+        for child in self._element:
+            nodes.append(_ETSimpleElementNode(child))
+            if child.tail:
+                nodes.append(_ETSimpleTextNode(child.tail))
+        return nodes
+
+
+class _ETActionElementAdapter:
+
+    def __init__(self, element):
+        self._element = element
+
+    def getAttribute(self, name):
+        return self._element.attrib.get(name, '')
+
+    def hasAttribute(self, name):
+        return name in self._element.attrib
+
+
+def _gettext_etree(element):
+    """Return text like General.getText() would for minidom nodes."""
+    if element is None:
+        return ''
+    rc = element.text or ''
+    for child in element:
+        rc += child.tail or ''
+    return rc
+
+
+def _toxml_etree(element):
+    return xml.etree.ElementTree.tostring(element, encoding='unicode')
 
 
 def default_vars():
     """Return default multi-value variables"""
     ret = {}
-    if not os.name == 'nt':
+    if not IS_WINDOWS:
         return ret
+    from bleachbit.Windows import get_windows_system_paths
     # Expand ProgramFiles to also be ProgramW6432, etc.
     wowvars = (('ProgramFiles', 'ProgramW6432'),
                ('CommonProgramFiles', 'CommonProgramW6432'))
     for v1, v2 in wowvars:
         # Remove None, if variable is not found.
         # Make list unique.
-        mylist = list(set([x for x in (os.getenv(v1), os.getenv(v2)) if x]))
+        mylist = list({x for x in (os.getenv(v1), os.getenv(v2)) if x})
         ret[v1] = mylist
+    ret['WindowsSystem'] = get_windows_system_paths()
     return ret
+
+
+def _parse_cleaner_xml(pathname):
+    """Parse a CleanerML file and return the root element."""
+    with open(pathname, 'rb') as f:
+        data = f.read()
+    reject_xml_dtd(data, 'CleanerML')
+    return xml.etree.ElementTree.fromstring(data)
 
 
 class CleanerML:
 
     """Create a cleaner from CleanerML"""
 
-    def __init__(self, pathname, xlate_cb=None):
+    def __init__(self, pathname, xlate_cb=None, trusted=True):
         """Create cleaner from XML in pathname.
 
         If xlate_cb is set, use it as a callback for each
-        translate-able string.
+        translate-able string (untranslated, as in the XML).
+
+        trusted is False for cleaners from user-writable directories;
+        their command-execution actions are ignored.
         """
 
         self.action = None
+        self.trusted = trusted
+        self.ignored_commands = set()
         self.cleaner = Cleaner.Cleaner()
         self.option_id = None
         self.option_name = None
@@ -78,9 +162,30 @@ class CleanerML:
         else:
             self.xlate_mode = True
 
-        dom = xml.dom.minidom.parse(pathname)
+        try:
+            root_element = _parse_cleaner_xml(pathname)
+        except Exception as e:
+            logger.error(
+                "Error parsing CleanerML file %s with error %s", pathname, e)
+            return
 
-        self.handle_cleaner(dom.getElementsByTagName('cleaner')[0])
+        if root_element.tag == 'cleaner':
+            cleaner_element = root_element
+        else:
+            cleaner_element = root_element.find('.//cleaner')
+            if cleaner_element is None:
+                logger.error(
+                    "Error parsing CleanerML file %s: missing <cleaner> element", pathname)
+                return
+
+        self.handle_cleaner(cleaner_element)
+
+        if self.ignored_commands:
+            commands = ', '.join(
+                f"'{c}'" for c in sorted(self.ignored_commands))
+            logger.warning(
+                "ignoring %s actions from untrusted cleaner: %s",
+                commands, pathname)
 
     def get_cleaner(self):
         """Return the created cleaner"""
@@ -93,91 +198,97 @@ class CleanerML:
         os_str -- the required operating system as written in XML
         platform -- used only for unit tests
         """
-        # If blank or if in .pot-creation-mode, return true.
-        if len(os_str) == 0 or self.xlate_mode:
+        # If in .pot-creation-mode, return true.
+        if self.xlate_mode:
             return True
-        # Otherwise, check platform.
-        # Define the current operating system.
-        if platform == 'darwin':
-            current_os = ('darwin', 'bsd', 'unix')
-        elif platform.startswith('linux'):
-            current_os = ('linux', 'unix')
-        elif platform.startswith('openbsd'):
-            current_os = ('bsd', 'openbsd', 'unix')
-        elif platform.startswith('netbsd'):
-            current_os = ('bsd', 'netbsd', 'unix')
-        elif platform.startswith('freebsd'):
-            current_os = ('bsd', 'freebsd', 'unix')
-        elif platform == 'win32':
-            current_os = ('windows')
-        else:
-            raise RuntimeError('Unknown operating system: %s ' % sys.platform)
-        # Compare current OS against required OS.
-        return os_str in current_os
+
+        return general_os_match(os_str, platform)
 
     def handle_cleaner(self, cleaner):
         """<cleaner> element"""
-        if not self.os_match(cleaner.getAttribute('os')):
+        self.cleaner.id = cleaner.attrib.get('id', '')
+        if not self.os_match(cleaner.attrib.get('os', '')):
             return
-        self.cleaner.id = cleaner.getAttribute('id')
-        self.handle_cleaner_label(cleaner.getElementsByTagName('label')[0])
-        description = cleaner.getElementsByTagName('description')
-        if description and description[0].parentNode == cleaner:
-            self.handle_cleaner_description(description[0])
-        for var in cleaner.getElementsByTagName('var'):
+
+        label = cleaner.find('label')
+        if label is None:
+            raise IndexError('missing <label> element')
+        self.handle_cleaner_label(label)
+
+        description = cleaner.find('description')
+        if description is not None:
+            self.handle_cleaner_description(description)
+
+        for var in cleaner.findall('var'):
             self.handle_cleaner_var(var)
-        for option in cleaner.getElementsByTagName('option'):
+
+        for option in cleaner.findall('option'):
             try:
                 self.handle_cleaner_option(option)
-            except:
+            except Exception:
+                # TRANSLATORS: Error message shown in the log.
+                # {cleaner_id} is the internal identifier of the cleaner.
+                # {option_xml} is the XML snippet that caused the error.
                 exc_msg = _(
                     "Error in handle_cleaner_option() for cleaner id = {cleaner_id}, option XML={option_xml}")
                 logger.exception(exc_msg.format(
-                    cleaner_id=exc_dict, option_xml=option.toxml()))
-        self.handle_cleaner_running(cleaner.getElementsByTagName('running'))
-        self.handle_localizations(
-            cleaner.getElementsByTagName('localizations'))
+                    cleaner_id=self.cleaner.id, option_xml=_toxml_etree(option)))
+        self.handle_cleaner_running(cleaner.findall('running'))
+        self.handle_localizations(cleaner.findall('localizations'))
 
     def handle_cleaner_label(self, label):
         """<label> element under <cleaner>"""
-        self.cleaner.name = _(getText(label.childNodes))
-        translate = label.getAttribute('translate')
+        msgid = _gettext_etree(label)
+        self.cleaner.name = _(msgid)
+        translate = label.attrib.get('translate', '')
         if translate and boolstr_to_bool(translate):
-            self.xlate_cb(self.cleaner.name)
+            self.xlate_cb(msgid)
 
     def handle_cleaner_description(self, description):
         """<description> element under <cleaner>"""
-        self.cleaner.description = _(getText(description.childNodes))
-        translators = description.getAttribute('translators')
-        self.xlate_cb(self.cleaner.description, translators)
+        msgid = _gettext_etree(description)
+        self.cleaner.description = _(msgid)
+        translators = description.attrib.get('translators', '')
+        self.xlate_cb(msgid, translators)
 
     def handle_cleaner_running(self, running_elements):
         """<running> element under <cleaner>"""
         # example: <running type="command">opera</running>
         for running in running_elements:
-            if not self.os_match(running.getAttribute('os')):
+            if not self.os_match(running.attrib.get('os', '')):
                 continue
-            detection_type = running.getAttribute('type')
-            value = getText(running.childNodes)
-            self.cleaner.add_running(detection_type, value)
+            detection_type = running.attrib.get('type', '')
+            value = _gettext_etree(running)
+            same_user_attr = running.attrib.get('same_user')
+            same_user = boolstr_to_bool(
+                same_user_attr) if same_user_attr else False
+            self.cleaner.add_running(detection_type, value, same_user)
 
     def handle_cleaner_option(self, option):
         """<option> element"""
-        self.option_id = option.getAttribute('id')
+        if not self.os_match(option.attrib.get('os', '')):
+            return
+        self.option_id = option.attrib.get('id', '')
         self.option_description = None
         self.option_name = None
 
-        self.handle_cleaner_option_label(
-            option.getElementsByTagName('label')[0])
-        description = option.getElementsByTagName('description')
-        self.handle_cleaner_option_description(description[0])
-        warning = option.getElementsByTagName('warning')
-        if warning:
-            self.handle_cleaner_option_warning(warning[0])
+        label = option.find('label')
+        if label is None:
+            raise IndexError('missing <label> under <option>')
+        self.handle_cleaner_option_label(label)
+
+        description = option.find('description')
+        if description is None:
+            raise IndexError('missing <description> under <option>')
+        self.handle_cleaner_option_description(description)
+
+        warning = option.find('warning')
+        if warning is not None:
+            self.handle_cleaner_option_warning(warning)
             if self.option_warning:
                 self.cleaner.set_warning(self.option_id, self.option_warning)
 
-        for action in option.getElementsByTagName('action'):
+        for action in option.findall('action'):
             self.handle_cleaner_option_action(action)
 
         self.cleaner.add_option(
@@ -185,49 +296,59 @@ class CleanerML:
 
     def handle_cleaner_option_label(self, label):
         """<label> element under <option>"""
-        self.option_name = _(getText(label.childNodes))
-        translate = label.getAttribute('translate')
-        translators = label.getAttribute('translators')
+        msgid = _gettext_etree(label)
+        self.option_name = _(msgid)
+        translate = label.attrib.get('translate', '')
+        translators = label.attrib.get('translators', '')
         if not translate or boolstr_to_bool(translate):
-            self.xlate_cb(self.option_name, translators)
+            self.xlate_cb(msgid, translators)
 
     def handle_cleaner_option_description(self, description):
         """<description> element under <option>"""
-        self.option_description = _(getText(description.childNodes))
-        translators = description.getAttribute('translators')
-        self.xlate_cb(self.option_description, translators)
+        msgid = _gettext_etree(description)
+        self.option_description = _(msgid)
+        translators = description.attrib.get('translators', '')
+        self.xlate_cb(msgid, translators)
 
     def handle_cleaner_option_warning(self, warning):
         """<warning> element under <option>"""
-        self.option_warning = _(getText(warning.childNodes))
-        self.xlate_cb(self.option_warning)
+        msgid = _gettext_etree(warning)
+        self.option_warning = _(msgid)
+        translators = warning.attrib.get('translators', '')
+        self.xlate_cb(msgid, translators)
 
     def handle_cleaner_option_action(self, action_node):
         """<action> element under <option>"""
-        if not self.os_match(action_node.getAttribute('os')):
+        if not self.os_match(action_node.attrib.get('os', '')):
             return
-        command = action_node.getAttribute('command')
-        provider = None
-        for actionplugin in ActionProvider.plugins:
-            if actionplugin.action_key == command:
-                provider = actionplugin(action_node, self.vars)
-        if provider is None:
-            raise RuntimeError("Invalid command '%s'" % command)
+        command = action_node.attrib.get('command', '')
+        if command in UNTRUSTED_BLOCKED_COMMANDS and not self.trusted:
+            # __init__ logs a summary warning once the whole file is parsed
+            self.ignored_commands.add(command)
+            logger.debug(
+                "ignoring '%s' action from untrusted cleaner '%s'",
+                command, self.cleaner.id or '?')
+            return
+        actionplugin = ActionProvider.plugins_by_key.get(command)
+        if actionplugin is None:
+            raise RuntimeError(f"Invalid command '{command}'")
+        provider = actionplugin(
+            _ETActionElementAdapter(action_node), self.vars)
         self.cleaner.add_action(self.option_id, provider)
 
     def handle_localizations(self, localization_nodes):
         """<localizations> element under <cleaner>"""
-        if not 'posix' == os.name:
+        if not IS_POSIX:
             return
         from bleachbit import Unix
         for localization_node in localization_nodes:
-            for child_node in localization_node.childNodes:
-                Unix.locales.add_xml(child_node)
+            for child_element in list(localization_node):
+                Unix.locales.add_xml(_ETSimpleElementNode(child_element))
         # Add a dummy action so the file isn't reported as unusable
         self.cleaner.add_action('localization', ActionProvider(None))
 
     def handle_cleaner_var(self, var):
-        """Handle one <var> element under <cleaner>.
+        r"""Handle one <var> element under <cleaner>.
 
         Example:
 
@@ -235,16 +356,28 @@ class CleanerML:
          <value search="glob">~/.config/f*</value>
          <value>~/.config/foo</value>
          <value>%AppData\foo</value>
+         <value search="winreg" path="HKCU\Software\Valve\Steam" name="SteamPath"></value>
          </var>
         """
-        var_name = var.getAttribute('name')
-        for value_element in var.getElementsByTagName('value'):
-            if not self.os_match(value_element.getAttribute('os')):
+        var_name = var.attrib.get('name', '')
+        for value_element in var.findall('value'):
+            if not self.os_match(value_element.attrib.get('os', '')):
                 continue
-            value_str = getText(value_element.childNodes)
-            is_glob = value_element.getAttribute('search') == 'glob'
-            if is_glob:
-                value_list = expand_glob_join(value_str, '')
+            value_str = _gettext_etree(value_element)
+            search_type = value_element.attrib.get('search', '')
+            if search_type == 'glob':
+                # Drop the trailing separator, or '$$var$$/x' becomes 'dir//x'
+                value_list = [os.path.normpath(value)
+                              for value in expand_glob_join(value_str, '')]
+            elif search_type == 'winreg':
+                if not IS_WINDOWS:
+                    continue
+                # pylint: disable-next=possibly-used-before-assignment
+                value_list = read_registry_key(value_element.attrib.get(
+                    'path', ''), value_element.attrib.get('name', ''))
+                if value_list is None:
+                    continue
+                value_list = [value_list, ]
             else:
                 value_list = [value_str, ]
             if var_name in self.vars:
@@ -255,90 +388,166 @@ class CleanerML:
                 self.vars[var_name] = value_list
 
 
-def list_cleanerml_files(local_only=False):
-    """List CleanerML files"""
-    cleanerdirs = (bleachbit.personal_cleaners_dir, )
-    if bleachbit.local_cleaners_dir:
-        # If the application is installed, locale_cleaners_dir is None
-        cleanerdirs = (bleachbit.local_cleaners_dir, )
+def reject_world_writable(pathname):
+    """Warn and return True if the cleaner or its directory is world writable.
+
+    Callers gate this on POSIX: the mode bits are meaningless on Windows.
+    """
+    if is_world_writable(pathname):
+        # TRANSLATORS: Warning printed to the log. %s expands to the
+        # path of the XML cleaner file that was skipped
+        logger.warning(_("Ignoring cleaner because it is "
+                         "world writable: %s"), pathname)
+        return True
+    if is_world_writable(os.path.dirname(pathname)):
+        # TRANSLATORS: Warning printed to the log. %s expands to the
+        # path of the XML cleaner file whose directory is world
+        # writable.
+        logger.warning(_("Ignoring cleaner because its directory is "
+                         "world writable: %s"), pathname)
+        return True
+    return False
+
+
+def list_cleanerml_files(local_only=False, system_only=False):
+    """List CleanerML files
+
+    The directories come in order of precedence (local, system, personal)
+    and the files are sorted within each one.
+    """
+    cleanerdirs = ()
+    if not system_only and bleachbit.local_cleaners_dir:
+        # If the application is installed, locale_cleaners_dir is None.
+        # If portable mode, local_cleaners_dir is under the directory of
+        # `bleachbit.py`.
+        cleanerdirs += (bleachbit.local_cleaners_dir, )
     if not local_only and bleachbit.system_cleaners_dir:
         cleanerdirs += (bleachbit.system_cleaners_dir, )
-    for pathname in listdir(cleanerdirs):
+    # In portable mode on Windows, the personal directory is the local one.
+    if not system_only and bleachbit.personal_cleaners_dir not in cleanerdirs:
+        cleanerdirs += (bleachbit.personal_cleaners_dir, )
+    check_world_writable = not IS_WINDOWS
+    pathnames = (pathname for cleanerdir in cleanerdirs
+                 for pathname in sorted(listdir(cleanerdir)))
+    for pathname in pathnames:
         if not pathname.lower().endswith('.xml'):
             continue
-        import stat
-        st = os.stat(pathname)
-        if sys.platform != 'win32' and stat.S_IMODE(st[stat.ST_MODE]) & 2:
-            # TRANSLATORS: When BleachBit detects the file permissions are
-            # insecure, it will not load the cleaner as if it did not exist.
-            logger.warning(
-                _("Ignoring cleaner because it is world writable: %s"), pathname)
-            continue
+        if check_world_writable:
+            try:
+                os.stat(pathname)
+            except OSError as e:
+                logger.warning('Could not read cleaner metadata %s: %s',
+                               pathname, e)
+                continue
+            if reject_world_writable(pathname):
+                continue
         yield pathname
 
 
-def load_cleaners(cb_progress=lambda x: None):
-    """Scan for CleanerML and load them"""
-    cleanerml_files = list(list_cleanerml_files())
-    cleanerml_files.sort()
+def is_trusted_cleaner(pathname):
+    """Return True if the cleaner file sits next to the application.
+
+    The personal cleaners directory is user-writable, so a lower-integrity
+    process could plant a cleaner there. The system and local cleaners
+    directories are writable in portable mode and in the source tree, but so
+    is the executable beside them, so distrusting them would gain nothing.
+    In portable mode the personal cleaners directory is the local one.
+    """
+    trusted_dirs = [d for d in (bleachbit.system_cleaners_dir,
+                                bleachbit.local_cleaners_dir) if d]
+    pathname = os.path.normpath(os.path.abspath(pathname))
+    for trusted_dir in trusted_dirs:
+        trusted_dir = os.path.normpath(os.path.abspath(trusted_dir))
+        if path_startswith(pathname, trusted_dir):
+            return True
+    return False
+
+
+def load_cleaners(cb_progress=lambda x: None, allow_local=True):
+    """Scan for CleanerML and load them
+
+    When two files share a cleaner id, the first one listed wins, so a
+    personal cleaner cannot replace a bundled one.
+    """
+    if IS_POSIX:
+        from bleachbit import Unix
+        # handle_localizations() adds to this tree on every load
+        Unix.locales = Unix.Locales()
+    cleanerml_files = list(list_cleanerml_files(system_only=not allow_local))
+    bleachbit.log_startup_time('CleanerML files listed')
     if not cleanerml_files:
         logger.debug('No CleanerML files to load.')
         return
     total_files = len(cleanerml_files)
     cb_progress(0.0)
     files_done = 0
+    not_usable = []
+    loaded = {}
+    deadline = time.monotonic() + _YIELD_SECONDS
     for pathname in cleanerml_files:
         try:
-            xmlcleaner = CleanerML(pathname)
-        except:
+            xmlcleaner = CleanerML(
+                pathname, trusted=is_trusted_cleaner(pathname))
+        except Exception:
+            # TRANSLATORS: Error message printed to the log.
+            # %s expands to the path of the XML cleaner file
             logger.exception(_("Error reading cleaner: %s"), pathname)
-            continue
-        cleaner = xmlcleaner.get_cleaner()
-        if cleaner.is_usable():
-            Cleaner.backends[cleaner.id] = cleaner
         else:
-            logger.debug(
-                # TRANSLATORS: An action is something like cleaning a specific file.
-                # "Not usable" means the whole cleaner will be ignored.
-                # The substituted variable is a pathname.
-                _("Cleaner is not usable on this OS because it has no actions: %s"), pathname)
+            cleaner = xmlcleaner.get_cleaner()
+            if cleaner.id in loaded:
+                logger.warning('Ignoring cleaner %s because %s has the same id',
+                               pathname, loaded[cleaner.id])
+            elif cleaner.is_usable():
+                Cleaner.backends[cleaner.id] = cleaner
+                loaded[cleaner.id] = pathname
+            elif cleaner.id:
+                not_usable.append(cleaner.id)
+            else:
+                not_usable.append(os.path.basename(pathname))
         files_done += 1
         cb_progress(1.0 * files_done / total_files)
-        yield True
+        if time.monotonic() >= deadline:
+            yield True
+            deadline = time.monotonic() + _YIELD_SECONDS
+    if not_usable:
+        logger.debug(
+            "%d cleaners are not usable on this OS because they have no actions: %s", len(not_usable), ', '.join(not_usable))
 
 
 def pot_fragment(msgid, pathname, translators=None):
     """Create a string fragment for generating .pot files"""
     msgid = msgid.replace('"', '\\"')  # escape quotation mark
     if translators:
-        translators = "#. %s\n" % translators
+        translators = f"#. {translators}\n"
     else:
         translators = ""
-    ret = '''%s#: %s
-msgid "%s"
+    pathname = pathname.replace('\\', '/')
+    return f'''{translators}#: {pathname}
+msgid "{msgid}"
 msgstr ""
 
-''' % (translators, pathname, msgid)
-    return ret
+'''
 
 
 def create_pot():
-    """Create a .pot for translation using gettext"""
+    """Create a .pot for translation using gettext
 
-    f = open('../po/cleanerml.pot', 'w')
+    This function is called from the Makefile.
 
-    for pathname in listdir('../cleaners'):
-        if not pathname.lower().endswith(".xml"):
-            continue
-        strings = []
-        try:
-            CleanerML(pathname,
-                      lambda newstr, translators=None:
-                      strings.append([newstr, translators]))
-        except:
-            logger.exception(_("Error reading cleaner: %s"), pathname)
-            continue
-        for (string, translators) in strings:
-            f.write(pot_fragment(string, pathname, translators))
+    Paths and newlines are normalized to Unix style.
+    """
 
-    f.close()
+    with open('../po/cleanerml.pot', 'w', encoding='utf-8', newline='\n') as f:
+        for pathname in listdir('../cleaners'):
+            if not pathname.lower().endswith(".xml"):
+                continue
+            strings = []
+            try:
+                CleanerML(pathname,
+                          lambda newstr, translators=None, current_strings=strings:
+                          current_strings.append([newstr, translators]))
+            except Exception:
+                logger.exception(_("Error reading cleaner: %s"), pathname)
+                continue
+            for (string, translators) in strings:
+                f.write(pot_fragment(string, pathname, translators))

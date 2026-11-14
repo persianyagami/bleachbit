@@ -1,8 +1,7 @@
 # vim: ts=4:sw=4:expandtab
-# -*- coding: UTF-8 -*-
 
 # BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
+# Copyright (C) 2008-2025 Andrew Ziem
 # https://www.bleachbit.org
 #
 # This program is free software: you can redistribute it and/or modify
@@ -16,7 +15,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
 """
@@ -25,12 +24,15 @@ Scan directory tree for files to delete
 
 import logging
 import os
-import platform
 import re
+import subprocess
+import time
 import unicodedata
 from collections import namedtuple
-from bleachbit import fs_scan_re_flags
+from bleachbit import FS_SCAN_RE_FLAGS, IS_FREEBSD, IS_LINUX, IS_MAC
 from . import Command
+from .FileUtilities import is_normal_directory, openfiles, whitelisted
+
 
 def normalized_walk(top, **kwargs):
     """
@@ -38,46 +40,77 @@ def normalized_walk(top, **kwargs):
     is like `os.walk` but recomposes those decomposed filenames on
     macOS
     """
-    try:
-        from scandir import walk
-    except:
-        # there is a warning in FileUtilities, so don't warn again here
-        from os import walk
-    if 'Darwin' == platform.system():
-        for dirpath, dirnames, filenames in walk(top, **kwargs):
+    if IS_MAC:
+        for dirpath, dirnames, filenames in os.walk(top, **kwargs):
             yield dirpath, dirnames, [
                 unicodedata.normalize('NFC', fn)
                 for fn in filenames
             ]
     else:
-        for result in walk(top, **kwargs):
-            yield result
+        yield from os.walk(top, **kwargs)
 
 
-Search = namedtuple('Search', ['command', 'regex', 'nregex', 'wholeregex', 'nwholeregex'])
+def _is_open(path):
+    """Return whether a process holds path open, or True if that is unknown"""
+    try:
+        return openfiles.is_open(path)
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError) as e:
+        logging.getLogger(__name__).warning(
+            'Keeping %s because open files cannot be listed: %s', path, e)
+        return True
+
+
+Search = namedtuple(
+    'Search', ['command', 'regex', 'nregex', 'wholeregex', 'nwholeregex',
+               'skip_open'])
 Search.__new__.__defaults__ = (None,) * len(Search._fields)
+
+
+def directory_prefix(dirpath):
+    """Return a prefix such that prefix + filename == os.path.join(dirpath, filename).
+
+    Uses os.path.join(dirpath, '') for the common case. Bare UNC roots like
+    \\\\server\\share are special: join(dir, '') does not add a separator, but
+    join(dir, name) still inserts one.
+    """
+    prefix = os.path.join(dirpath, '')
+    if prefix == dirpath:
+        # join was a no-op (e.g. 'C:' or a bare UNC share). Probe whether a
+        # real filename would insert a separator that concatenation would miss.
+        probe = os.path.join(dirpath, 'a')
+        if probe != dirpath + 'a':
+            return probe[:-1]
+    return prefix
+
 
 class CompiledSearch:
     """Compiled search condition"""
+
     def __init__(self, search):
         self.command = search.command
 
         def re_compile(regex):
-            return re.compile(regex, fs_scan_re_flags) if regex else None
+            return re.compile(regex, FS_SCAN_RE_FLAGS) if regex else None
 
         self.regex = re_compile(search.regex)
         self.nregex = re_compile(search.nregex)
         self.wholeregex = re_compile(search.wholeregex)
         self.nwholeregex = re_compile(search.nwholeregex)
+        # open_files() supports only these platforms
+        self.skip_open = bool(search.skip_open) and (
+            IS_LINUX or IS_MAC or IS_FREEBSD)
 
-    def match(self, dirpath, filename):
-        full_path = os.path.join(dirpath, filename)
-
+    def match(self, dirpath, filename, path_prefix=None):
         if self.regex and not self.regex.search(filename):
             return None
 
         if self.nregex and self.nregex.search(filename):
             return None
+
+        if path_prefix is None:
+            full_path = os.path.join(dirpath, filename)
+        else:
+            full_path = path_prefix + filename
 
         if self.wholeregex and not self.wholeregex.search(full_path):
             return None
@@ -86,6 +119,7 @@ class CompiledSearch:
             return None
 
         return full_path
+
 
 class DeepScan:
 
@@ -99,25 +133,54 @@ class DeepScan:
         """Perform requested searches and yield each match"""
         logging.getLogger(__name__).debug(
             'DeepScan.scan: searches=%s', str(self.searches))
-        import time
         yield_time = time.time()
+        # Overlapping searches and nested tops can match a file twice
+        matched = set()
+        compiled = {top: [CompiledSearch(s) for s in searches]
+                    for (top, searches) in self.searches.items()}
+        # Keep an open file any skip_open search matches, even when another
+        # search or top reaches it first
+        guards = [(directory_prefix(top), c)
+                  for (top, searches) in compiled.items()
+                  for c in searches if c.skip_open]
 
-        for (top, searches) in self.searches.items():
-            compiled_searches = []
-            for s in searches:
-                compiled_searches.append(CompiledSearch(s))
+        def keep_open(dirpath, filename, path_prefix):
+            for (top_prefix, c) in guards:
+                if (path_prefix.startswith(top_prefix)
+                        and c.match(dirpath, filename, path_prefix)
+                        and _is_open(path_prefix + filename)):
+                    return True
+            return False
 
+        for (top, compiled_searches) in compiled.items():
+            # This skips top-level directories that are in the keep list
+            # to reduce unnecessary work.
+            if whitelisted(top):
+                continue
             for (dirpath, dirnames, filenames) in normalized_walk(top):
+                # Prune keep-list dirs, symlinks, and reparse points:
+                # os.walk's followlinks=False skips POSIX links but not
+                # junctions, which would otherwise redirect the scan.
+                kept_dirs = []
+                for dirname in dirnames:
+                    subdir = os.path.join(dirpath, dirname)
+                    if not whitelisted(subdir) and is_normal_directory(subdir):
+                        kept_dirs.append(dirname)
+                dirnames[:] = kept_dirs
+                path_prefix = directory_prefix(dirpath)
                 for c in compiled_searches:
-                    # fixme, don't match filename twice
                     for filename in filenames:
-                        full_name = c.match(dirpath, filename)
-                        if full_name is not None:
-                            # fixme: support other commands
-                            if c.command == 'delete':
-                                yield Command.Delete(full_name)
-                            elif c.command == 'shred':
-                                yield Command.Shred(full_name)
+                        full_name = c.match(dirpath, filename, path_prefix)
+                        if full_name is None or full_name in matched:
+                            continue
+                        matched.add(full_name)
+                        if keep_open(dirpath, filename, path_prefix):
+                            continue
+                        # fixme: support other commands
+                        if c.command == 'delete':
+                            yield Command.Delete(full_name)
+                        elif c.command == 'shred':
+                            yield Command.Shred(full_name)
 
                 if time.time() - yield_time > 0.25:
                     # allow GTK+ to process the idle loop

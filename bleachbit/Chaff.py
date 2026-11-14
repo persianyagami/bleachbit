@@ -1,33 +1,20 @@
-# vim: ts=4:sw=4:expandtab
-# -*- coding: UTF-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
+#
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
+import bz2
+from datetime import datetime, timedelta
 import email.generator
 from email.mime.text import MIMEText
+import hashlib
 import json
 import logging
 import os
 import random
 import tempfile
-from datetime import datetime
 
-from bleachbit import _, bleachbit_exe_path
 from bleachbit import options_dir
 
 from . import markovify
@@ -39,85 +26,83 @@ logger = logging.getLogger(__name__)
 # mhcaleja@state.gov
 
 RECIPIENTS = [
-              'abedinh@state.gov',
-              'adlerce@state.gov',
-              'baerdb@state.gov',
-              'baldersonkm@state.gov',
-              'balderstonkm@state.gov',
-              'bam@mikulski.senate.gov',
-              'bealeca@state.gov',
-              'benjamin_moncrief@lemieux.senate.gov',
-              'blaker2@state.gov',
-              'brimmere@state.gov',
-              'burnswj@state.gov',
-              'butzgych2@state.gov',
-              'campbellkm@state.gov',
-              'carsonj@state.gov',
-              'cholletdh@state.gov',
-              'cindy.buhl@mail.house.gov',
-              'colemancl@state.gov',
-              'crowleypj@state.gov',
-              'danieljj@state.gov',
-              'david_garten@lautenberg.senate.gov',
-              'dewanll@state.gov',
-              'feltmanjd@state.gov',
-              'fuchsmh@state.gov',
-              'goldbergps@state.gov',
-              'goldenjr@state.gov',
-              'gonzalezjs@state.gov',
-              'gordonph@state.gov',
-              'hanleymr@state.gov',
-              'hdr22@clintonemail.com',
-              'hillcr@state.gov',
-              'holbrookerc@state.gov',
-              'hormatsrd@state.gov',
-              'hr15@att.blackberry.net',
-              'hr15@mycingular.blackberry.net',
-              'hrod17@clintonemail.com',
-              'huma@clintonemail.com',
-              'hyded@state.gov',
-              'info@mailva.evite.com',
-              'jilotylc@state.gov',
-              'jonespw2@state.gov',
-              'kellyc@state.gov',
-              'klevorickcb@state.gov',
-              'kohhh@state.gov',
-              'laszczychj@state.gov',
-              'lewjj@state.gov',
-              'macmanusje@state.gov',
-              'marshallcp@state.gov',
-              'mchaleja@state.gov',
-              'millscd@state.gov',
-              'millscd@state.gov',
-              'muscatinel@state.gov',
-              'nidestr@state.gov',
-              'nulandvj@state.gov',
-              'oterom2@state.gov',
-              'posnermh@state.gov',
-              'reinesp@state.gov',
-              'reinespi@state.gov',
-              'ricese@state.gov',
-              'rodriguezme@state.gov',
-              'rooneym@state.gov',
-              's_specialassistants@state.gov',
-              'schwerindb@state.gov',
-              'shannonta@state.gov',
-              'shapiroa@state.gov',
-              'shermanwr@state.gov',
-              'slaughtera@state.gov',
-              'steinbergjb@state.gov',
-              'sterntd@state.gov',
-              'sullivanjj@state.gov',
-              'tauschereo@state.gov',
-              'tillemannts@state.gov',
-              'toivnf@state.gov',
-              'tommy_ross@reid.senate.gov',
-              'valenzuelaaa@state.gov',
-              'valmorolj@state.gov',
-              'valmorolj@state.gov',
-              'vermarr@state.gov',
-              'verveerms@state.gov',
-              'woodardew@state.gov']
+    'abedinh@state.gov',
+    'adlerce@state.gov',
+    'baerdb@state.gov',
+    'baldersonkm@state.gov',
+    'balderstonkm@state.gov',
+    'bam@mikulski.senate.gov',
+    'bealeca@state.gov',
+    'benjamin_moncrief@lemieux.senate.gov',
+    'blaker2@state.gov',
+    'brimmere@state.gov',
+    'burnswj@state.gov',
+    'butzgych2@state.gov',
+    'campbellkm@state.gov',
+    'carsonj@state.gov',
+    'cholletdh@state.gov',
+    'cindy.buhl@mail.house.gov',
+    'colemancl@state.gov',
+    'crowleypj@state.gov',
+    'danieljj@state.gov',
+    'david_garten@lautenberg.senate.gov',
+    'dewanll@state.gov',
+    'feltmanjd@state.gov',
+    'fuchsmh@state.gov',
+    'goldbergps@state.gov',
+    'goldenjr@state.gov',
+    'gonzalezjs@state.gov',
+    'gordonph@state.gov',
+    'hanleymr@state.gov',
+    'hdr22@clintonemail.com',
+    'hillcr@state.gov',
+    'holbrookerc@state.gov',
+    'hormatsrd@state.gov',
+    'hr15@att.blackberry.net',
+    'hr15@mycingular.blackberry.net',
+    'hrod17@clintonemail.com',
+    'huma@clintonemail.com',
+    'hyded@state.gov',
+    'info@mailva.evite.com',
+    'jilotylc@state.gov',
+    'jonespw2@state.gov',
+    'kellyc@state.gov',
+    'klevorickcb@state.gov',
+    'kohhh@state.gov',
+    'laszczychj@state.gov',
+    'lewjj@state.gov',
+    'macmanusje@state.gov',
+    'marshallcp@state.gov',
+    'mchaleja@state.gov',
+    'millscd@state.gov',
+    'muscatinel@state.gov',
+    'nidestr@state.gov',
+    'nulandvj@state.gov',
+    'oterom2@state.gov',
+    'posnermh@state.gov',
+    'reinesp@state.gov',
+    'reinespi@state.gov',
+    'ricese@state.gov',
+    'rodriguezme@state.gov',
+    'rooneym@state.gov',
+    's_specialassistants@state.gov',
+    'schwerindb@state.gov',
+    'shannonta@state.gov',
+    'shapiroa@state.gov',
+    'shermanwr@state.gov',
+    'slaughtera@state.gov',
+    'steinbergjb@state.gov',
+    'sterntd@state.gov',
+    'sullivanjj@state.gov',
+    'tauschereo@state.gov',
+    'tillemannts@state.gov',
+    'toivnf@state.gov',
+    'tommy_ross@reid.senate.gov',
+    'valenzuelaaa@state.gov',
+    'valmorolj@state.gov',
+    'vermarr@state.gov',
+    'verveerms@state.gov',
+    'woodardew@state.gov']
 DEFAULT_SUBJECT_LENGTH = 64
 DEFAULT_NUMBER_OF_SENTENCES_CLINTON = 50
 DEFAULT_NUMBER_OF_SENTENCES_2600 = 50
@@ -125,6 +110,19 @@ MODEL_BASENAMES = (
     '2600_model.json.bz2',
     'clinton_content_model.json.bz2',
     'clinton_subject_model.json.bz2')
+MODEL_SHA512 = {
+    '2600_model.json.bz2':
+        '1c06c362587c177908fee6a4f7a439a684ada48404f40fec72cba5ba1f90aff5'
+        '9e76742718f8dc290853fe08f32f2c1b60b769c412765340fc428f0ea3fc46d7',
+    'clinton_content_model.json.bz2':
+        'ea92709c17082e1113c00138d9dd9fd970a7089f4de9bc8f58a0ce3312782154'
+        '9554cb2cd6b5591f1e7035513badeff11af09423357b8ecf5a20bc5a61a9b8ef',
+    'clinton_subject_model.json.bz2':
+        '4cff92b6cab27d4efccc65c0f9378c21af0fe02b59e5d1790cfdf675c555fda9'
+        '8cb7083e8268aa0878198ce4df4160db4f4e77f191e301bea31c02c19bc1c2bf',
+}
+if set(MODEL_SHA512) != set(MODEL_BASENAMES):
+    raise RuntimeError('every model in MODEL_BASENAMES needs a SHA-512')
 URL_TEMPLATES = (
     'https://sourceforge.net/projects/bleachbit/files/chaff/%s/download',
     'https://download.bleachbit.org/chaff/%s')
@@ -134,7 +132,6 @@ DEFAULT_MODELS_DIR = options_dir
 def _load_model(model_path):
     _open = open
     if model_path.endswith('.bz2'):
-        import bz2
         _open = bz2.open
     with _open(model_path, 'rt', encoding='utf-8') as model_file:
         return markovify.Text.from_dict(json.load(model_file))
@@ -157,16 +154,22 @@ def _get_random_recipient():
 
 
 def _get_random_datetime(min_year=2011, max_year=2012):
-    date = datetime.strptime('{} {}'.format(random.randint(
-        1, 365), random.randint(min_year, max_year)), '%j %Y')
-    # Saturday, September 15, 2012 2:20 PM
-    return date.strftime('%A, %B %d, %Y %I:%M %p')
+    date = datetime.strptime(
+        f'{random.randint(1, 365)} {random.randint(min_year, max_year)}',
+        '%j %Y')
+    date += timedelta(minutes=random.randrange(24 * 60))
+    # Saturday, September 15, 2012 2:20 PM: no zero padding, unlike %d and %I
+    hour = date.hour % 12 or 12
+    return date.strftime(f'%A, %B {date.day}, %Y {hour}:%M %p')
 
 
 def _get_random_content(content_model, number_of_sentences=DEFAULT_NUMBER_OF_SENTENCES_CLINTON):
     content = []
-    for _ in range(number_of_sentences):
-        content.append(content_model.make_sentence())
+    for _i in range(number_of_sentences):
+        sentence = content_model.make_sentence()
+        if sentence is None:
+            sentence = ''
+        content.append(sentence)
         content.append(random.choice([' ', ' ', '\n\n']))
     try:
         return MIMEText(''.join(content), _charset='iso-8859-1')
@@ -178,7 +181,8 @@ def _generate_email(subject_model, content_model, number_of_sentences=DEFAULT_NU
     message = _get_random_content(
         content_model, number_of_sentences=number_of_sentences)
 
-    message['Subject'] = subject_model.make_short_sentence(subject_length)
+    subject = subject_model.make_short_sentence(subject_length)
+    message['Subject'] = subject if subject is not None else ''
     message['To'] = _get_random_recipient()
     message['From'] = _get_random_recipient()
     message['Sent'] = _get_random_datetime()
@@ -186,58 +190,13 @@ def _generate_email(subject_model, content_model, number_of_sentences=DEFAULT_NU
     return message
 
 
-def download_url_to_fn(url, fn, on_error=None, max_retries=2, backoff_factor=0.5):
-    """Download a URL to the given filename"""
-    logger.info('Downloading %s to %s', url, fn)
-    import requests
-    import sys
-    if hasattr(sys, 'frozen'):
-        # when frozen by py2exe, certificates are in alternate location
-        CA_BUNDLE = os.path.join(bleachbit_exe_path, 'cacert.pem')
-        requests.utils.DEFAULT_CA_BUNDLE_PATH = CA_BUNDLE
-        requests.adapters.DEFAULT_CA_BUNDLE_PATH = CA_BUNDLE
-    from urllib3.util.retry import Retry
-    from requests.adapters import HTTPAdapter
-    session = requests.Session()
-    # 408: request timeout
-    # 429: too many requests
-    # 500: internal server error
-    # 502: bad gateway
-    # 503: service unavailable
-    # 504: gateway_timeout
-    status_forcelist = (408, 429, 500, 502, 503, 504)
-    # sourceforge.net directories to download mirror
-    retries = Retry(total=max_retries, backoff_factor=backoff_factor,
-                    status_forcelist=status_forcelist, redirect=5)
-    session.mount('http://', HTTPAdapter(max_retries=retries))
-    msg = _('Downloading url failed: %s') % url
-
-    from bleachbit.Update import user_agent
-    headers = {'user_agent': user_agent()}
-
-    def do_error(msg2):
-        if on_error:
-            on_error(msg, msg2)
-        from bleachbit.FileUtilities import delete
-        delete(fn, ignore_missing=True)  # delete any partial download
+def _is_model_valid(fn, basename):
+    """Check that the model file exists and matches its SHA-512"""
     try:
-        response = session.get(url, headers=headers)
-        content = response.content
-    except requests.exceptions.RequestException as exc:
-        msg2 = '{}: {}'.format(type(exc).__name__, exc)
-        logger.exception(msg)
-        do_error(msg2)
+        with open(fn, 'rb') as f:
+            return hashlib.sha512(f.read()).hexdigest() == MODEL_SHA512[basename]
+    except OSError:
         return False
-    else:
-        if not response.status_code == 200:
-            logger.error(msg)
-            msg2 = 'Status code: %s' % response.status_code
-            do_error(msg2)
-            return False
-
-    with open(fn, 'wb') as f:
-        f.write(content)
-    return True
 
 
 def download_models(models_dir=DEFAULT_MODELS_DIR,
@@ -248,15 +207,18 @@ def download_models(models_dir=DEFAULT_MODELS_DIR,
 
     Returns success as boolean value
     """
+    from bleachbit.Network import download_url_to_fn
     for basename in (MODEL_BASENAMES):
         fn = os.path.join(models_dir, basename)
-        if os.path.exists(fn):
+        if _is_model_valid(fn, basename):
             logger.debug('File %s already exists', fn)
             continue
+        if os.path.exists(fn):
+            logger.warning('Downloading %s again because it is corrupt', fn)
         this_file_success = False
         for url_template in URL_TEMPLATES:
             url = url_template % basename
-            if download_url_to_fn(url, fn, on_error):
+            if download_url_to_fn(url, fn, expected_sha512=MODEL_SHA512[basename], on_error=on_error):
                 this_file_success = True
                 break
         if not this_file_success:
@@ -264,12 +226,16 @@ def download_models(models_dir=DEFAULT_MODELS_DIR,
     return True
 
 
+# Reordering the parameters would break the call sites.
+# pylint: disable-next=keyword-arg-before-vararg
 def generate_emails(number_of_emails,
                     email_output_dir,
                     models_dir=DEFAULT_MODELS_DIR,
                     number_of_sentences=DEFAULT_NUMBER_OF_SENTENCES_CLINTON,
                     on_progress=None,
-                    *kwargs):
+                    should_stop=None,
+                    *_kwargs,
+                    generated_file_names=None):
     logger.debug('Loading two email models')
     subject_model_path = os.path.join(
         models_dir, 'clinton_subject_model.json.bz2')
@@ -277,24 +243,35 @@ def generate_emails(number_of_emails,
         models_dir, 'clinton_content_model.json.bz2')
     subject_model = load_subject_model(subject_model_path)
     content_model = load_content_model(content_model_path)
-    logger.debug('Generating {:,} emails'.format(number_of_emails))
-    generated_file_names = []
+    logger.debug('Generating %s emails', f'{number_of_emails:,}')
+    if generated_file_names is None:
+        generated_file_names = []
+    cumulative_size = 0
     for i in range(1, number_of_emails + 1):
         with tempfile.NamedTemporaryFile(mode='w+', prefix='outlook-', suffix='.eml', dir=email_output_dir, delete=False) as email_output_file:
+            # Before writing, so the caller can delete it if the write fails
+            generated_file_names.append(email_output_file.name)
             email_generator = email.generator.Generator(email_output_file)
             msg = _generate_email(
                 subject_model, content_model, number_of_sentences=number_of_sentences)
             email_generator.write(msg.as_string())
-            generated_file_names.append(email_output_file.name)
+            cumulative_size += email_output_file.tell()
         if on_progress:
-            on_progress(1.0*i/number_of_emails)
+            on_progress(1.0 * i / number_of_emails,
+                        generated_file_names=generated_file_names,
+                        cumulative_size=cumulative_size)
+        if should_stop and should_stop(generated_file_names, cumulative_size):
+            break
     return generated_file_names
 
 
 def _generate_2600_file(model, number_of_sentences=DEFAULT_NUMBER_OF_SENTENCES_2600):
     content = []
-    for _ in range(number_of_sentences):
-        content.append(model.make_sentence())
+    for _i in range(number_of_sentences):
+        sentence = model.make_sentence()
+        if sentence is None:
+            sentence = ''
+        content.append(sentence)
         # The space is repeated to make paragraphs longer.
         content.append(random.choice([' ', ' ', '\n\n']))
     return ''.join(content)
@@ -303,19 +280,29 @@ def _generate_2600_file(model, number_of_sentences=DEFAULT_NUMBER_OF_SENTENCES_2
 def generate_2600(file_count,
                   output_dir,
                   model_dir=DEFAULT_MODELS_DIR,
-                  on_progress=None):
+                  on_progress=None,
+                  should_stop=None,
+                  generated_file_names=None):
     logger.debug('Loading 2600 model')
     model_path = os.path.join(model_dir, '2600_model.json.bz2')
     model = _load_model(model_path)
-    logger.debug('Generating {:,} files'.format(file_count))
-    generated_file_names = []
+    logger.debug('Generating %s files', f'{file_count:,}')
+    if generated_file_names is None:
+        generated_file_names = []
+    cumulative_size = 0
     for i in range(1, file_count + 1):
         with tempfile.NamedTemporaryFile(mode='w+', encoding='utf-8', prefix='2600-', suffix='.txt', dir=output_dir, delete=False) as output_file:
+            # Before writing, so the caller can delete it if the write fails
+            generated_file_names.append(output_file.name)
             txt = _generate_2600_file(model)
             output_file.write(txt)
-            generated_file_names.append(output_file.name)
+            cumulative_size += output_file.tell()
         if on_progress:
-            on_progress(1.0*i/file_count)
+            on_progress(1.0 * i / file_count,
+                        generated_file_names=generated_file_names,
+                        cumulative_size=cumulative_size)
+        if should_stop and should_stop(generated_file_names, cumulative_size):
+            break
     return generated_file_names
 
 
@@ -325,6 +312,6 @@ def have_models():
     Used to check whether download is needed."""
     for basename in (MODEL_BASENAMES):
         fn = os.path.join(DEFAULT_MODELS_DIR, basename)
-        if not os.path.exists(fn):
+        if not _is_model_valid(fn, basename):
             return False
     return True

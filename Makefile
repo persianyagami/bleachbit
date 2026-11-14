@@ -1,15 +1,14 @@
-# Copyright (C) 2008-2020 Andrew Ziem.  All rights reserved.
-# License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.
+##
+# Copyright (C) 2008-2026 Andrew Ziem.  All rights reserved.
+# License GPLv3+: GNU GPL version 3 or later <https://www.gnu.org/licenses/gpl-3.0.html>.
 # This is free software: You are free to change and redistribute it.
 # There is NO WARRANTY, to the extent permitted by law.
-#
-# Makefile edited by https://github.com/Tobias-B-Besemer
-# Done on 2019-03-13
+##
 
 # On some systems if not explicitly given, make uses /bin/sh
-SHELL := /bin/bash
+SHELL != command -v bash || echo /bin/sh
 
-.PHONY: clean install tests build
+.PHONY: clean install tests tests-pytest tests-nsis build tests-with-sudo lint require-lint-tools delete_windows_files pretty stamp check-revision appimage clean-appimage install-deps install-deps-dev
 
 prefix ?= /usr/local
 bindir ?= $(prefix)/bin
@@ -17,31 +16,87 @@ datadir ?= $(prefix)/share
 
 INSTALL = install
 INSTALL_DATA = $(INSTALL) -m 644
+INSTALL_SCRIPT = $(INSTALL) -m 755
 
 # if not specified, do not check coverage
 PYTHON ?= python3
-COVERAGE ?= $(PYTHON)
+# Quoted form for calling Python. Windows CI passes a backslash path that bash
+# mangles unquoted, so use this instead of $(PYTHON).
+PYTHON_CMD := "$(PYTHON)"
+COVERAGE ?= $(PYTHON_CMD)
+
+# pytest runner used by `tests-pytest`. Extra arguments go in PYTEST_ARGS
+PYTEST ?= $(PYTHON_CMD) -m pytest
+PYTEST_ARGS ?=
+
+# Set PYTEST_COVERAGE to any value to measure coverage of the pytest runs
+ifdef PYTEST_COVERAGE
+PYTEST_COV := --cov=bleachbit --cov-report=
+PYTEST_COV_APPEND := --cov=bleachbit --cov-append --cov-report=
+endif
+
+# The executable is pyflakes3 on Debian and pyflakes elsewhere, and Debian's
+# python3-pyflakes ships neither, so fall back to the module.
+PYFLAKES ?= $(or $(shell command -v pyflakes3 2>/dev/null),\
+                 $(shell command -v pyflakes 2>/dev/null),\
+                 $(PYTHON_CMD) -m pyflakes)
+
+# Arguments forwarded to scripts/install-deps.sh, such as --venv
+INSTALL_DEPS_ARGS ?=
+
+# Windows drops pywin32 from ignored-modules so extension-pkg-allow-list can
+# check it, and ignores the POSIX-only modules instead.
+# MSYS make does not inherit OS, hence uname.
+UNAME_S := $(shell uname -s 2>/dev/null)
+ifneq (,$(filter MSYS% MINGW% CYGWIN%,$(UNAME_S)))
+PYLINT_ARGS ?= --ignored-modules=bleachbit.GtkShim,certifi,fcntl,gi,gi.repository,PIL,plyer,pwd,py2exe,pywinauto,win32com.shell
+else
+PYLINT_ARGS ?=
+endif
+
+ifneq ($(COVERAGE),$(PYTHON_CMD))
+BLEACHBIT_SUDO_COVERAGE_RUNNER := $(COVERAGE) --append
+BLEACHBIT_SUDO_COVERAGE_FILE := $(if $(COVERAGE_FILE),$(COVERAGE_FILE),.coverage)
+else
+BLEACHBIT_SUDO_COVERAGE_RUNNER :=
+BLEACHBIT_SUDO_COVERAGE_FILE :=
+endif
 
 build:
 	echo Nothing to build
 
+install-deps:
+	@./scripts/install-deps.sh $(INSTALL_DEPS_ARGS)
+
+install-deps-dev:
+	@./scripts/install-deps.sh --dev $(INSTALL_DEPS_ARGS)
+
 clean:
-	@rm -vf {.,bleachbit,tests,windows}/*{pyc,pyo,~}
+	@rm -vf {.,bleachbit,tests,windows,bleachbit/markovify}/*{pyc,pyo,~} # files
+	@rm -vrf {.,bleachbit,tests,windows,bleachbit/markovify}/__pycache__ # directories
 	@rm -vrf build dist # created by py2exe
-	@rm -rf BleachBit-Portable # created by windows/setup_py2exe.bat
-	@rm -rf BleachBit-*-portable.zip
+	@rm -rf BleachBit-Portable # created by windows/setup.bat
+	@rm -rf BleachBit-*-portable*.zip
 	@rm -vf MANIFEST # created by setup.py
-	make -C po clean
+	$(MAKE) -C po clean
 	@rm -vrf locale
-	@rm -vrf {*/,./}*.{pychecker,pylint,pyflakes}.log
+	@rm -vrf {*/,./}*.{autopep8,pylint,pyflakes,shellcheck}.log
 	@rm -vrf windows/BleachBit-*-setup*.{exe,zip}
 	@rm -vrf htmlcov .coverage # code coverage reports
+	@rm -vrf *.egg-info # Python package metadata
+	@rm -vrf docker-artifacts # Docker build outputs
+	@rm -rf "$(APPIMAGE_APPDIR)"
+	@rm -f $(LINUXDEPLOY) $(LINUXDEPLOY_GTK_PLUGIN)
+	@rm -f BleachBit-*.AppImage
+
+clean-appimage:
+	@rm -rf "$(APPIMAGE_APPDIR)"
+	@rm -f BleachBit-*.AppImage
 
 install:
 	# "binary"
 	mkdir -p $(DESTDIR)$(bindir)
-	$(INSTALL_DATA) bleachbit.py $(DESTDIR)$(bindir)/bleachbit
-	chmod 0755 $(DESTDIR)$(bindir)/bleachbit
+	$(INSTALL_SCRIPT) bleachbit.py $(DESTDIR)$(bindir)/bleachbit
 
 	# application launcher
 	mkdir -p $(DESTDIR)$(datadir)/applications
@@ -57,61 +112,260 @@ install:
 	$(INSTALL_DATA) bleachbit/markovify/*.py $(DESTDIR)$(datadir)/bleachbit/markovify
 	#note: compileall is recursive
 	cd $(DESTDIR)$(datadir)/bleachbit && \
-	$(PYTHON) -O -c "import compileall; compileall.compile_dir('.')" && \
-	$(PYTHON) -c "import compileall; compileall.compile_dir('.')"
+	$(PYTHON_CMD) -O -c "import compileall; compileall.compile_dir('.')" && \
+	$(PYTHON_CMD) -c "import compileall; compileall.compile_dir('.')"
 
 	# cleaners
 	mkdir -p $(DESTDIR)$(datadir)/bleachbit/cleaners
 	$(INSTALL_DATA) cleaners/*.xml $(DESTDIR)$(datadir)/bleachbit/cleaners
 
-	# menu
-	$(INSTALL_DATA) data/app-menu.ui $(DESTDIR)$(datadir)/bleachbit
+	# share files
+	mkdir -p $(DESTDIR)$(datadir)/bleachbit/share
+	$(INSTALL_DATA) share/app-menu.ui $(DESTDIR)$(datadir)/bleachbit/share
+	$(INSTALL_DATA) share/protected_path.xml $(DESTDIR)$(datadir)/bleachbit/share
 
 	# icon
 	mkdir -p $(DESTDIR)$(datadir)/pixmaps
 	$(INSTALL_DATA) bleachbit.png $(DESTDIR)$(datadir)/pixmaps/
+	mkdir -p $(DESTDIR)$(datadir)/icons/hicolor/scalable/apps
+	$(INSTALL_DATA) bleachbit.svg $(DESTDIR)$(datadir)/icons/hicolor/scalable/apps/
 
 	# translations
-	make -C po install DESTDIR=$(DESTDIR)
+	$(MAKE) -C po install DESTDIR=$(DESTDIR)
 
 	# PolicyKit
 	mkdir -p $(DESTDIR)$(datadir)/polkit-1/actions
 	$(INSTALL_DATA) org.bleachbit.policy $(DESTDIR)$(datadir)/polkit-1/actions/
 
-lint:
-	[ -x "$$(command -v pychecker)" ] ||  echo "WARNING: pychecker not found"
-	[ -x "$$(command -v pyflakes)" ] ||  echo "WARNING: pyflakes not found"
-	[ -x "$$(command -v pylint)" ] ||  echo "WARNING: pylint not found"
-	for f in *py */*py; \
-	do \
-		echo "$$f"; \
-		( [ -x "$$(command -v pychecker)" ] && pyflakes "$$f" > "$$f".pychecker.log ); \
-		( [ -x "$$(command -v pyflakes)" ] && pyflakes "$$f" > "$$f".pyflakes.log ); \
-		( [ -x "$$(command -v pylint)" ] && pylint "$$f" > "$$f".pylint.log ); \
+# `lint` only warns about a missing tool, which is fine locally but hides a
+# skipped check in CI. Depend on this to turn those warnings into an error.
+require-lint-tools:
+	@missing=; \
+	$(PYFLAKES) --version >/dev/null 2>&1 || missing="$$missing pyflakes"; \
+	for c in pylint autopep8 shellcheck appstreamcli; do \
+		command -v $$c >/dev/null 2>&1 || missing="$$missing $$c"; \
 	done; \
-	exit 0
+	if [ -n "$$missing" ]; then \
+		echo "ERROR: Missing lint tools:$$missing"; \
+		echo "APT users, try: sudo apt install pyflakes3 pylint python3-autopep8 shellcheck appstream"; \
+		exit 1; \
+	fi
+
+lint:
+	@rc=0; \
+	if command -v appstreamcli >/dev/null 2>&1; then \
+		appstreamcli validate org.bleachbit.BleachBit.metainfo.xml || rc=1; \
+	else \
+		echo "WARNING: Missing appstreamcli. APT users, try: sudo apt install appstream"; \
+	fi; \
+	echo "Running shellcheck, pyflakes, pylint, and autopep8 in parallel: see all.shellcheck.log, all.pyflakes.log, all.pylint.log, and all.autopep8.log"; \
+	shellcheck_pid=; \
+	if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck scripts/*.sh docker/*.sh > all.shellcheck.log 2>&1 & \
+		shellcheck_pid=$$!; \
+	else \
+		echo "WARNING: Missing shellcheck. APT users, try: sudo apt install shellcheck"; \
+	fi; \
+	pyflakes_pid=; \
+	if $(PYFLAKES) --version >/dev/null 2>&1; then \
+		$(PYFLAKES) {.,bleachbit,tests,windows}/*py > all.pyflakes.log 2>&1 & \
+		pyflakes_pid=$$!; \
+	else \
+		echo "WARNING: Missing pyflakes. APT users, try: sudo apt install pyflakes3"; \
+	fi; \
+	pylint_pid=; \
+	if command -v pylint >/dev/null 2>&1; then \
+		pylint -j 0 $(PYLINT_ARGS) {.,bleachbit,tests,windows}/*py > all.pylint.log 2>&1 & \
+		pylint_pid=$$!; \
+	else \
+		echo "WARNING: Missing pylint. APT users, try: sudo apt install pylint"; \
+	fi; \
+	autopep8_pid=; \
+	if command -v autopep8 >/dev/null 2>&1; then \
+		autopep8 --diff --exit-code {.,bleachbit,tests,windows}/*py > all.autopep8.log 2>&1 & \
+		autopep8_pid=$$!; \
+	else \
+		echo "WARNING: Missing autopep8. APT users, try: sudo apt install python3-autopep8"; \
+	fi; \
+	if [ -n "$$shellcheck_pid" ]; then \
+		wait $$shellcheck_pid || { \
+			rc=1; \
+			echo "ERROR: shellcheck reported problems"; \
+			cat all.shellcheck.log; \
+		}; \
+	fi; \
+	if [ -n "$$pyflakes_pid" ]; then \
+		wait $$pyflakes_pid || { \
+			rc=1; \
+			echo "ERROR: pyflakes reported problems"; \
+			cat all.pyflakes.log; \
+		}; \
+	fi; \
+	if [ -n "$$pylint_pid" ]; then \
+		wait $$pylint_pid || { \
+			rc=1; \
+			echo "ERROR: pylint reported problems"; \
+			cat all.pylint.log; \
+		}; \
+	fi; \
+	if [ -n "$$autopep8_pid" ]; then \
+		wait $$autopep8_pid || { \
+			rc=1; \
+			echo "ERROR: autopep8 would reformat; run make pretty"; \
+			cat all.autopep8.log; \
+		}; \
+	fi; \
+	wait; \
+	exit $$rc
 
 delete_windows_files:
 	# This is used for building .deb and .rpm packages.
 	# Remove Windows-specific cleaners.
-	awk '/os=\"windows/ && /id=\"/ {print FILENAME}' cleaners/*.xml | xargs rm -f
-	# Remove Windows-specific modules.
-	rm -f bleachbit/{Winapp,Windows*}.py 
-
-downgrade_desktop:
-#	This will downgrade the version of the .desktop file for older Linux distributions.
-#	See https://github.com/bleachbit/bleachbit/issues/750
-	desktop-file-validate org.bleachbit.BleachBit.desktop || \
-	 sed --regexp-extended -i '/^(Keywords|Version)=/d' org.bleachbit.BleachBit.desktop
+	grep -l "cleaner id=\"\w*\" os=\"windows\"" cleaners/*xml | xargs rm -f
+	# Remove Windows-specific code.
+	rm -f bleachbit/{Winapp,Windows*}.py tests/TestWindows{,Wipe}.py
+	# The windows/ directory is left in place because removing it breaks po/Makefile.
 
 tests:
-	make -C cleaners tests; cleaners_status=$$?; \
-	$(COVERAGE) -m unittest discover -p Test*.py -v; py_status=$$?; \
-	exit $$(($$cleaners_status + $$py_status))
+	# Check translations but do not abort.
+	$(MAKE) -C po tests
+	# Catch Python warnings as errors. Also set in `tests/common.py`.
+	$(MAKE) -C cleaners tests; cleaners_status=$$?; \
+	PYTHONWARNINGS=error $(COVERAGE) -m unittest discover -p Test*.py -v; py_status=$$?; \
+	$(MAKE) tests-nsis; nsis_status=$$?; \
+	exit $$(($$cleaners_status + $$py_status + $$nsis_status))
+
+# The suite CI runs: the xdist pass, then the serial no_xdist pass.
+# The second pass is skipped if the first fails.
+tests-pytest:
+	PYTHONWARNINGS=error PYTHONPATH=. $(PYTEST) -n logical --dist=loadgroup \
+		-m 'not no_xdist' $(PYTEST_COV) $(PYTEST_ARGS)
+	PYTHONWARNINGS=error PYTHONPATH=. $(PYTEST) \
+		-m no_xdist $(PYTEST_COV_APPEND) $(PYTEST_ARGS)
+
+tests-nsis:
+	$(PYTHON_CMD) windows/nsis_translations.py --unittest
+
+tests-with-sudo:
+	# Run tests marked with @also_with_sudo using sudo
+	PYTHONWARNINGS=error \
+		BLEACHBIT_COVERAGE_RUNNER="$(BLEACHBIT_SUDO_COVERAGE_RUNNER)" \
+		BLEACHBIT_COVERAGE_FILE="$(BLEACHBIT_SUDO_COVERAGE_FILE)" \
+		$(PYTHON_CMD) tests/test_with_sudo.py
 
 pretty:
-	autopep8 -i {.,bleachbit,tests}/*py
-	dos2unix  {.,bleachbit,tests}/*py
-	make -C cleaners pretty
-	xmllint --format doc/cleaner_markup_language.xsd > doc/cleaner_markup_language.xsd.tmp
-	mv doc/cleaner_markup_language.xsd.tmp doc/cleaner_markup_language.xsd
+	@if command -v autopep8 >/dev/null 2>&1; then \
+		echo "Running autopep* on .py files"; \
+		autopep8 -i {.,bleachbit,tests,windows}/*py; \
+	else \
+		echo "WARNING: Missing autopep8. APT users, try: sudo apt install python3-autopep8"; \
+	fi
+	@if command -v dos2unix >/dev/null 2>&1; then \
+		echo "Running dos2unix on .py files"; \
+		dos2unix {.,bleachbit,tests,windows}/*py; \
+	else \
+		echo "WARNING: Missing dos2unix. APT users, try: sudo apt install dos2unix"; \
+	fi
+	$(MAKE) -C cleaners pretty
+	@if command -v xmllint >/dev/null 2>&1; then \
+		echo "Running xmllint on .xsd file"; \
+		xmllint --format doc/cleaner_markup_language.xsd > doc/cleaner_markup_language.xsd.tmp; \
+		mv doc/cleaner_markup_language.xsd.tmp doc/cleaner_markup_language.xsd; \
+	else \
+		echo "WARNING: Missing xmllint. APT users, try: sudo apt install libxml2-utils"; \
+	fi
+
+stamp:
+	# Rebuild bleachbit/Revision.py so official builds know their git
+	# revision (from .git, else the REVISION environment variable), CI
+	# build number, and build date (for the outdated-build notice).
+	@rev=$$(git rev-parse --short=8 HEAD 2>/dev/null || echo "$${REVISION:-}"); \
+	{ \
+		if [ -n "$$rev" ]; then \
+			echo "revision = \"$$rev\""; \
+		fi; \
+		if [ -n "$${BUILD_NUMBER:-$${GITHUB_RUN_NUMBER:-}}" ]; then \
+			echo "build_number = \"$${BUILD_NUMBER:-$${GITHUB_RUN_NUMBER}}\""; \
+		fi; \
+		echo "build_date = \"$$(date -u +%F)\""; \
+	} > bleachbit/Revision.py
+
+check-revision:
+	# Official package builds must install a Revision.py stamped with
+	# the git revision and build date, so fail loudly here rather than
+	# ship an unidentified build. Tarballs get it from `make stamp` at
+	# sdist time; builds without .git use the REVISION env var.
+	@grep -q '^revision = "' bleachbit/Revision.py 2>/dev/null && \
+		grep -q '^build_date = "' bleachbit/Revision.py || { \
+		echo "ERROR: bleachbit/Revision.py is not stamped with a git revision and build date." >&2; \
+		echo "Create the source tarball from a git checkout (see sdist.sh or 'make stamp')," >&2; \
+		echo "or set the REVISION environment variable and run 'make stamp'." >&2; \
+		exit 1; \
+	}
+
+# AppImage build
+APPIMAGE_BUILD_DIR ?= appimage-build
+APPIMAGE_APPDIR := $(abspath $(APPIMAGE_BUILD_DIR))
+APPIMAGE_OUTPUT ?= BleachBit-$(shell $(PYTHON_CMD) -c "import sys; sys.path.insert(0,'.'); from bleachbit import APP_VERSION; print(APP_VERSION)" 2>/dev/null || echo "latest")-x86_64.AppImage
+APPIMAGE_OUTPUT_PATH := $(abspath $(APPIMAGE_OUTPUT))
+LINUXDEPLOY ?= linuxdeploy-x86_64.AppImage
+LINUXDEPLOY_GTK_PLUGIN ?= linuxdeploy-plugin-gtk.sh
+LINUXDEPLOY_URL ?= https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+LINUXDEPLOY_GTK_PLUGIN_URL ?= https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+
+$(LINUXDEPLOY):
+	@echo "* Downloading linuxdeploy"
+	wget -c "$(LINUXDEPLOY_URL)" -O $(LINUXDEPLOY)
+	chmod +x $(LINUXDEPLOY)
+
+$(LINUXDEPLOY_GTK_PLUGIN):
+	@echo "* Downloading linuxdeploy-plugin-gtk"
+	wget -c "$(LINUXDEPLOY_GTK_PLUGIN_URL)" -O $(LINUXDEPLOY_GTK_PLUGIN)
+	chmod +x $(LINUXDEPLOY_GTK_PLUGIN)
+
+appimage: $(LINUXDEPLOY) $(LINUXDEPLOY_GTK_PLUGIN)
+	@echo "* Building AppImage: $(APPIMAGE_OUTPUT)"
+	# Clean previous build
+	rm -rf "$(APPIMAGE_APPDIR)"
+	# Build translations (.mo files)
+	$(MAKE) -C po
+	# Stamp revision, build number, and build date into Revision.py
+	$(MAKE) stamp
+	# Install application into AppDir with prefix=/usr
+	$(MAKE) install DESTDIR="$(APPIMAGE_APPDIR)" prefix=/usr
+	# Copy icon to hicolor theme so linuxdeploy can find it
+	mkdir -p "$(APPIMAGE_APPDIR)/usr/share/icons/hicolor/256x256/apps"
+	cp bleachbit.png "$(APPIMAGE_APPDIR)/usr/share/icons/hicolor/256x256/apps/bleachbit.png"
+	# Run GTK plugin first to set up AppDir (hooks, schemas, loaders, etc.)
+	# DEPLOY_GTK_VERSION must be set because bleachbit is a Python script,
+	# not a compiled binary, so auto-detection of GTK version fails.
+	DEPLOY_GTK_VERSION=3 ./$(LINUXDEPLOY) \
+		--appdir "$(APPIMAGE_APPDIR)" \
+		--plugin gtk
+	# Patch the hook file before packaging:
+	# 1. Prepend bundled libraries to LD_LIBRARY_PATH so the AppImage's
+	#    GTK/gdk-pixbuf libraries are used instead of the host system's.
+	#    Without this, the host's gdk-pixbuf ignores GDK_PIXBUF_MODULEDIR
+	#    and cannot find the bundled pixbuf loaders.
+	# 2. Export GDK_PIXBUF_MODULEDIR so gdk-pixbuf can resolve the
+	#    relative loader paths in loaders.cache.
+	sed -i '1s|^|export LD_LIBRARY_PATH="$$APPDIR/usr/lib:$$LD_LIBRARY_PATH"\n|' \
+		"$(APPIMAGE_APPDIR)/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+	echo 'export GDK_PIXBUF_MODULEDIR="$$APPDIR/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders"' \
+		>> "$(APPIMAGE_APPDIR)/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+	# Package the AppDir into an AppImage
+	./$(LINUXDEPLOY) \
+		--appdir "$(APPIMAGE_APPDIR)" \
+		--output appimage
+	# linuxdeploy names output after the desktop file; rename to our convention
+	@if [ -f BleachBit-x86_64.AppImage ] && [ "$(abspath BleachBit-x86_64.AppImage)" != "$(APPIMAGE_OUTPUT_PATH)" ]; then \
+		mv BleachBit-x86_64.AppImage "$(APPIMAGE_OUTPUT_PATH)"; \
+	fi
+	# Test the AppImage to check it doesn't crash
+	@if [ -n "$${SKIP_APPIMAGE_TEST:-}" ]; then \
+		echo "SKIP_APPIMAGE_TEST is set, skipping AppImage test."; \
+	else \
+		"$(APPIMAGE_OUTPUT_PATH)" --sysinfo; \
+	fi
+
+	@echo "* AppImage created: $(APPIMAGE_OUTPUT_PATH)"

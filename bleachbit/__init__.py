@@ -1,64 +1,173 @@
-# vim: ts=4:sw=4:expandtab
-# -*- coding: UTF-8 -*-
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 """
 Code that is commonly shared throughout BleachBit
 """
 
-import gettext
-import locale
+import atexit
 import os
 import re
 import sys
-import platform
+import time
 
 from bleachbit import Log
-from configparser import RawConfigParser, NoOptionError, SafeConfigParser
 
-APP_VERSION = "4.1.1"
+APP_VERSION = "6.0.6"
 APP_NAME = "BleachBit"
 APP_URL = "https://www.bleachbit.org"
+APP_COPYRIGHT = "Copyright (C) 2008-2026 Andrew Ziem"
 
 socket_timeout = 10
 
-if sys.version_info < (3,0,0):
-    print('BleachBit no longer supports Python 2.x.')
+if sys.version_info < (3, 8, 0):
+    sys.stderr.write('BleachBit requires Python version 3.8 or later\n')
     sys.exit(1)
 
-if hasattr(sys, 'frozen') and sys.frozen == 'windows_exe':
-    stdout_encoding = 'utf-8'
-else:
-    stdout_encoding = sys.stdout.encoding
-    if 'win32' == sys.platform:
-        import win_unicode_console
-        win_unicode_console.enable()
-
-if not hasattr(platform, 'linux_distribution'):
-    from ._platform import _linux_distribution
-    platform.linux_distribution = _linux_distribution
+# The frozen Windows GUI has no real stdout
+stdout_encoding = getattr(sys.stdout, 'encoding', None) or 'utf-8'
 
 logger = Log.init_log()
+
+
+def _seconds_since_process_start():
+    """Return seconds since the process was created, or None if unknown"""
+    try:
+        if os.name == 'nt':
+            import ctypes
+            from ctypes import wintypes
+            # Private so the prototypes below stay local to this function
+            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + \
+                [ctypes.POINTER(wintypes.FILETIME)] * 4
+            times = (wintypes.FILETIME * 4)()
+            if not kernel32.GetProcessTimes(
+                    kernel32.GetCurrentProcess(), *map(ctypes.byref, times)):
+                return None
+            now = wintypes.FILETIME()
+            getattr(kernel32, 'GetSystemTimePreciseAsFileTime',
+                    kernel32.GetSystemTimeAsFileTime)(ctypes.byref(now))
+
+            def as_int(filetime):
+                return (filetime.dwHighDateTime << 32) | filetime.dwLowDateTime
+            return (as_int(now) - as_int(times[0])) / 1e7
+        if sys.platform.startswith('linux'):
+            with open('/proc/self/stat', encoding='ascii') as stat_file:
+                fields = stat_file.read().rsplit(')', 1)[1].split()
+            # field 22 of /proc/PID/stat, clock ticks since boot
+            started = int(fields[19]) / os.sysconf('SC_CLK_TCK')
+            return time.clock_gettime(time.CLOCK_BOOTTIME) - started
+    except (OSError, AttributeError, IndexError, ValueError) as e:
+        logger.debug('could not read the process start time: %s', e)
+    return None
+
+
+class _StartupClock:
+    """Milestone timer behind log_startup_time()"""
+
+    def __init__(self):
+        self.t0 = time.monotonic()
+        self.imported = self.t0
+        self.enabled = os.getenv(
+            'BLEACHBIT_STARTUP_PROFILE') in ('1', 'true', 'True')
+        self.rebased = False
+
+    def _log(self, name, when=None):
+        if when is None:
+            when = time.monotonic()
+        logger.info('startup %s: %.1f ms', name, (when - self.t0) * 1000)
+
+    def log(self, name):
+        if not self.enabled:
+            return
+        if not self.rebased:
+            self.rebased = True
+            since_start = _seconds_since_process_start()
+            if since_start is not None:
+                self.t0 = time.monotonic() - since_start
+            self._log('package imported', self.imported)
+            # Registered after logging's own handler, so it runs before it
+            atexit.register(self._log, 'atexit done')
+        self._log(name)
+
+
+_startup_clock = _StartupClock()
+
+
+def log_startup_time(name):
+    """Log milestones when BLEACHBIT_STARTUP_PROFILE is set
+
+    Times count from process creation where the OS reports it, else from
+    the package import. The first call is after bootstrap() hardened the
+    DLL search path, so ctypes loads only then.
+    """
+    _startup_clock.log(name)
+
 
 # Setting below value to false disables update notification (useful
 # for packages in repositories).
 online_update_notification_enabled = True
+
+#
+# Platform
+#
+
+# platform
+IS_WINDOWS = os.name == 'nt'
+IS_POSIX = os.name == 'posix'
+IS_LINUX = sys.platform.startswith('linux')
+IS_MAC = sys.platform == 'darwin'
+IS_BSD = sys.platform.startswith(('freebsd', 'openbsd', 'netbsd'))
+IS_FREEBSD = sys.platform.startswith('freebsd')
+IS_NETBSD = sys.platform[:6] == 'netbsd'
+ARCH_BITS = 64 if sys.maxsize > 2**32 else 32
+
+
+def _harden_dll_search_path():
+    """Drop the current directory (and PATH when frozen) from the DLL search path.
+
+    Blocks DLL-preloading privilege escalation. bootstrap() calls it before
+    the first DLL loads, not at import, so build tooling that imports the
+    package does not disturb the search path.
+    """
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+
+    # Frozen builds bundle every dependency next to the exe, so restrict to
+    # app dir + System32 + add_dll_directory() dirs (also drops PATH).
+    # SetDefaultDllDirectories needs Win8+ (or 7 with KB2533623)
+    if hasattr(sys, 'frozen'):
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS = 0x00001000
+        try:
+            set_default = kernel32.SetDefaultDllDirectories
+            set_default.argtypes = [wintypes.DWORD]
+            set_default.restype = wintypes.BOOL
+            if set_default(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS):
+                return
+        except (AttributeError, OSError) as e:
+            logger.debug('SetDefaultDllDirectories is unavailable, so falling '
+                         'back to SetDllDirectoryW: %s', e)
+
+    # drops the current directory but keeps PATH; NULL would restore the default
+    try:
+        set_dir = kernel32.SetDllDirectoryW
+        set_dir.argtypes = [wintypes.LPCWSTR]
+        set_dir.restype = wintypes.BOOL
+        set_dir("")
+    except (AttributeError, OSError) as e:
+        logger.debug('could not drop the current directory from the DLL '
+                     'search path: %s', e)
+
+
+# file system attributes
+FS_CASE_SENSITIVE = not (IS_WINDOWS or IS_MAC)
+FS_SCAN_RE_FLAGS = 0 if FS_CASE_SENSITIVE else re.IGNORECASE
+
 
 #
 # Paths
@@ -69,9 +178,11 @@ bleachbit_exe_path = None
 if hasattr(sys, 'frozen'):
     # running frozen in py2exe
     bleachbit_exe_path = os.path.dirname(sys.executable)
+    bleachbit_package_path = bleachbit_exe_path
 else:
     # __file__ is absolute path to __init__.py
-    bleachbit_exe_path = os.path.dirname(os.path.dirname(__file__))
+    bleachbit_package_path = os.path.dirname(__file__)
+    bleachbit_exe_path = os.path.dirname(bleachbit_package_path)
 
 # license
 license_filename = None
@@ -88,13 +199,25 @@ for lf in license_filenames:
         license_filename = lf
         break
 
+
+def _home_dir():
+    """Return home directory with fallback for missing HOME and passwd entry."""
+    home = os.getenv('HOME')
+    if home:
+        return home
+    # expanduser() falls back to a lookup in passwd database.
+    home = os.path.expanduser('~')
+    if home != '~':
+        return home
+    return '/tmp'
+
+
 # configuration
 portable_mode = False
 options_dir = None
-if 'posix' == os.name:
-    options_dir = os.path.expanduser("~/.config/bleachbit")
-elif 'nt' == os.name:
-    os.environ.pop('FONTCONFIG_FILE', None)
+if IS_POSIX:
+    options_dir = os.path.join(_home_dir(), ".config/bleachbit")
+elif IS_WINDOWS:
     if os.path.exists(os.path.join(bleachbit_exe_path, 'bleachbit.ini')):
         # portable mode
         portable_mode = True
@@ -102,14 +225,21 @@ elif 'nt' == os.name:
     else:
         # installed mode
         options_dir = os.path.expandvars(r"${APPDATA}\BleachBit")
+
+options_dir = os.environ.get('BLEACHBIT_TEST_OPTIONS_DIR', options_dir)
+
 options_file = os.path.join(options_dir, "bleachbit.ini")
 
 # check whether the application is running from the source tree
 if not portable_mode:
-    e1 = os.path.exists(os.path.join(bleachbit_exe_path, '../cleaners'))
-    e2 = os.path.exists(os.path.join(bleachbit_exe_path, '../Makefile'))
-    e3 = os.path.exists(os.path.join(bleachbit_exe_path, '../COPYING'))
-    portable_mode = all((e1, e2, e3))
+    paths = (
+        '../cleaners',
+        '../Makefile',
+        '../COPYING')
+    existing = (
+        os.path.exists(os.path.join(bleachbit_exe_path, path))
+        for path in paths)
+    portable_mode = all(existing)
 
 # personal cleaners
 personal_cleaners_dir = os.path.join(options_dir, "cleaners")
@@ -118,15 +248,20 @@ personal_cleaners_dir = os.path.join(options_dir, "cleaners")
 # On Windows in portable mode, the bleachbit_exe_path is equal to
 # options_dir, so be careful that system_cleaner_dir is not set to
 # personal_cleaners_dir.
-if os.path.isdir(os.path.join(bleachbit_exe_path, 'cleaners')) and not portable_mode:
-    system_cleaners_dir = os.path.join(bleachbit_exe_path, 'cleaners')
-elif sys.platform.startswith('linux') or sys.platform == 'darwin':
+_exe_cleaners_dir = os.path.join(bleachbit_exe_path, 'cleaners')
+_package_cleaners_dir = os.path.join(bleachbit_package_path, 'cleaners')
+if os.path.isdir(_exe_cleaners_dir) and not portable_mode:
+    system_cleaners_dir = _exe_cleaners_dir
+elif os.path.isdir(_package_cleaners_dir) and not portable_mode:
+    # AppImage
+    system_cleaners_dir = _package_cleaners_dir
+elif IS_LINUX or IS_MAC:
     system_cleaners_dir = '/usr/share/bleachbit/cleaners'
-elif sys.platform == 'win32':
+elif IS_WINDOWS:
     system_cleaners_dir = os.path.join(bleachbit_exe_path, 'share\\cleaners\\')
-elif sys.platform[:6] == 'netbsd':
+elif IS_NETBSD:
     system_cleaners_dir = '/usr/pkg/share/bleachbit/cleaners'
-elif sys.platform.startswith('openbsd') or sys.platform.startswith('freebsd'):
+elif IS_BSD:
     system_cleaners_dir = '/usr/local/share/bleachbit/cleaners'
 else:
     system_cleaners_dir = None
@@ -138,16 +273,61 @@ local_cleaners_dir = None
 if portable_mode:
     local_cleaners_dir = os.path.join(bleachbit_exe_path, 'cleaners')
 
+
+def get_share_dirs():
+    """Return ordered list of directories to search for shared data files."""
+    if hasattr(sys, 'frozen'):
+        # frozen in py2exe
+        base_dirs = [
+            os.path.join(bleachbit_exe_path, 'share'),
+            bleachbit_exe_path,
+        ]
+    else:
+        # installed .deb or .rpm has `__file__` = "/usr/share/bleachbit/__init__.py",
+        # so that dirname() is "/usr/share/bleachbit"
+        package_dir = bleachbit_package_path
+        # When running from source, share directory is `../share/` from `__init__.py`.
+        repo_root = os.path.normpath(os.path.join(package_dir, '..'))
+        base_dirs = [
+            os.path.join(package_dir, 'share'),
+            os.path.join(repo_root, 'share')
+        ]
+    if system_cleaners_dir:
+        # One directory up from the system cleaners directory.
+        # This works when installed, like under `/usr/share`.
+        base_dirs.append(os.path.dirname(system_cleaners_dir))
+    # Remove duplicates while preserving the order.
+    return list(dict.fromkeys(base_dirs))
+
+
+def get_share_path(filename):
+    """Return path to a shared data file if it exists, else None."""
+    for base_dir in get_share_dirs():
+        candidate = os.path.normpath(os.path.join(base_dir, filename))
+        if os.path.exists(candidate):
+            return candidate
+    logger.error('unknown location for %s', filename)
+    return None
+
+
 # windows10 theme
-windows10_theme_path = os.path.normpath(os.path.join(bleachbit_exe_path, 'themes/windows10'))
+windows10_theme_path = os.path.normpath(
+    os.path.join(bleachbit_exe_path, 'themes/windows10'))
 
 # application icon
 __icons = (
-    '/usr/share/pixmaps/bleachbit.png',  # Linux
-    '/usr/pkg/share/pixmaps/bleachbit.png',  # NetBSD
-    '/usr/local/share/pixmaps/bleachbit.png',  # FreeBSD and OpenBSD
+    # AppImage
     os.path.normpath(os.path.join(bleachbit_exe_path,
-                                  'share\\bleachbit.png')),  # Windows
+                                  'pixmaps/bleachbit.png')),
+    # Linux
+    '/usr/share/pixmaps/bleachbit.png',
+    # NetBSD
+    '/usr/pkg/share/pixmaps/bleachbit.png',
+    # FreeBSD and OpenBSD
+    '/usr/local/share/pixmaps/bleachbit.png',
+    # Windows
+    os.path.normpath(os.path.join(bleachbit_exe_path,
+                                  'share\\bleachbit.png')),
     # When running from source (i.e., not installed).
     os.path.normpath(os.path.join(bleachbit_exe_path, 'bleachbit.png')),
 )
@@ -156,156 +336,53 @@ for __icon in __icons:
     if os.path.exists(__icon):
         appicon_path = __icon
 
-# menu
-# This path works when running from source (cross platform) or when
-# installed on Windows.
-app_menu_filename = os.path.join(bleachbit_exe_path, 'data', 'app-menu.ui')
-if not os.path.exists(app_menu_filename) and system_cleaners_dir:
-    # This path works when installed on Linux.
-    app_menu_filename = os.path.abspath(
-        os.path.join(system_cleaners_dir, '../app-menu.ui'))
-if not os.path.exists(app_menu_filename):
-    logger.error('unknown location for app-menu.ui')
+
+def _resolve_locale_dir(exe_path, is_linux, is_mac, is_windows, is_netbsd, is_bsd,
+                        path_exists=os.path.exists):
+    """Return the locale directory to use, given the platform and the
+    directory containing the running executable.
+
+    In the macOS .app bundle, exe_path is Contents/Resources (the parent
+    of the bleachbit package directory), while locale/ lives one level up
+    at Contents/locale -- the AppImage-style 'next to the executable'
+    check below does not find it, which previously fell through to the
+    Linux/macOS '/usr/share/locale/' fallback and silently lost all
+    bundled translations.
+
+    The current directory is not searched: the Explorer context menu
+    starts BleachBit in the folder of the file to shred.
+    """
+    exe_locale_dir = os.path.join(exe_path, 'locale')
+    bundle_locale_dir = os.path.normpath(
+        os.path.join(exe_path, '..', 'locale')) if is_mac else None
+    if path_exists(exe_locale_dir):
+        # AppImage, or running from source
+        return exe_locale_dir
+    if is_mac and bundle_locale_dir and path_exists(bundle_locale_dir):
+        # macOS .app bundle: Contents/locale, one level above
+        # Contents/Resources
+        return bundle_locale_dir
+    # system-wide installed locale
+    if is_linux or is_mac:
+        return "/usr/share/locale/"
+    if is_windows:
+        return os.path.join(exe_path, "share\\locale\\")
+    if is_netbsd:
+        return "/usr/pkg/share/locale/"
+    if is_bsd:
+        return "/usr/local/share/locale/"
+    return "/usr/share/locale/"
+
 
 # locale directory
-if os.path.exists("./locale/"):
-    # local locale (personal)
-    locale_dir = os.path.abspath("./locale/")
-else:
-    # system-wide installed locale
-    if sys.platform.startswith('linux') or sys.platform == 'darwin':
-        locale_dir = "/usr/share/locale/"
-    elif sys.platform == 'win32':
-        locale_dir = os.path.join(bleachbit_exe_path, 'share\\locale\\')
-    elif sys.platform[:6] == 'netbsd':
-        locale_dir = "/usr/pkg/share/locale/"
-    elif (sys.platform.startswith('openbsd') or
-          sys.platform.startswith('freebsd')):
-        locale_dir = "/usr/local/share/locale/"
-
-
-
-#
-# gettext
-#
-try:
-    (user_locale, encoding) = locale.getdefaultlocale()
-except:
-    logger.exception('error getting locale')
-    user_locale = None
-    encoding = None
-
-if user_locale is None:
-    user_locale = 'C'
-    logger.warning("no default locale found.  Assuming '%s'", user_locale)
-
-if 'win32' == sys.platform:
-    os.environ['LANG'] = user_locale
-
-try:
-    if not os.path.exists(locale_dir):
-        raise RuntimeError('translations not installed')
-    t = gettext.translation('bleachbit', locale_dir)
-    _ = t.gettext
-except:
-    def _(msg):
-        """Dummy replacement for gettext"""
-        return msg
-
-try:
-    locale.bindtextdomain('bleachbit', locale_dir)
-except AttributeError:
-    if sys.platform.startswith('win'):
-        try:
-            # We're on Windows; try and use libintl-8.dll instead
-            import ctypes
-            libintl = ctypes.cdll.LoadLibrary('libintl-8.dll')
-        except OSError:
-            # libintl-8.dll isn't available; give up
-            pass
-        else:
-            # bindtextdomain can not handle Unicode
-            libintl.bindtextdomain(b'bleachbit', locale_dir.encode('utf-8'))
-            libintl.bind_textdomain_codeset(b'bleachbit', b'UTF-8')
-except:
-    logger.exception('error binding text domain')
-
-try:
-    ungettext = t.ungettext
-except:
-    def ungettext(singular, plural, n):
-        """Dummy replacement for Unicode, plural gettext"""
-        if 1 == n:
-            return singular
-        return plural
-
-
-#
-# pgettext
-#
-
-# Code released in the Public Domain. You can do whatever you want with this package.
-# Originally written by Pierre Métras <pierre@alterna.tv> for the OLPC XO laptop.
-#
-# Original source: http://dev.laptop.org/git/activities/clock/plain/pgettext.py
-
-
-# pgettext(msgctxt, msgid) from gettext is not supported in Python as of January 2017
-# http://bugs.python.org/issue2504
-# Meanwhile we get official support, we have to simulate it.
-# See http://www.gnu.org/software/gettext/manual/gettext.html#Ambiguities for
-# more information about pgettext.
-
-# The separator between message context and message id.This value is the same as
-# the one used in gettext.h, so PO files should be still valid when Python gettext
-# module will include pgettext() function.
-GETTEXT_CONTEXT_GLUE = "\004"
-
-
-def pgettext(msgctxt, msgid):
-    """A custom implementation of GNU pgettext().
-    """
-    if msgctxt is not None and msgctxt != "":
-        translation = _(msgctxt + GETTEXT_CONTEXT_GLUE + msgid)
-        if translation.startswith(msgctxt + GETTEXT_CONTEXT_GLUE):
-            return msgid
-        else:
-            return translation
-    else:
-        return _(msgid)
-
-
-# Map our pgettext() custom function to _p()
-_p = pgettext
+locale_dir = _resolve_locale_dir(
+    bleachbit_exe_path, IS_LINUX, IS_MAC, IS_WINDOWS, IS_NETBSD, IS_BSD)
 
 
 #
 # URLs
 #
 base_url = "https://update.bleachbit.org"
-help_contents_url = "%s/help/%s" \
-    % (base_url, APP_VERSION)
-release_notes_url = "%s/release-notes/%s" \
-    % (base_url, APP_VERSION)
-update_check_url = "%s/update/%s" % (base_url, APP_VERSION)
-
-# set up environment variables
-if 'nt' == os.name:
-    from bleachbit import Windows
-    Windows.setup_environment()
-
-if 'posix' == os.name:
-    # XDG base directory specification
-    envs = {
-        'XDG_DATA_HOME': os.path.expanduser('~/.local/share'),
-        'XDG_CONFIG_HOME': os.path.expanduser('~/.config'),
-        'XDG_CACHE_HOME': os.path.expanduser('~/.cache')
-    }
-    for varname, value in envs.items():
-        if not os.getenv(varname):
-            os.environ[varname] = value
-
-if 'posix' == os.name:
-    fs_scan_re_flags = 0 # should be re.IGNORECASE on macOS
-else:
-    fs_scan_re_flags = re.IGNORECASE
+comms_check_url = f"{base_url}/comms-check"  # build-time smoke test
+help_contents_url = "https://www.bleachbit.org/help"
+update_check_url = f"{base_url}/update/{APP_VERSION}"

@@ -1,24 +1,10 @@
-# vim: ts=4:sw=4:expandtab
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
-
-"""
+r"""
 Functionality specific to Microsoft Windows
 
 The Windows Registry terminology can be confusing. Take for example
@@ -37,44 +23,226 @@ These are the terms:
 
 """
 
-import bleachbit
-from bleachbit import Command, FileUtilities, General
-
+# standard imports
+import atexit
+import base64
+import ctypes
+import errno
+import functools
 import glob
+import hashlib
 import logging
+import ntpath
 import os
+import re
+import shutil
 import sys
-
+import time
+from ctypes import wintypes
 from decimal import Decimal
+from pathlib import Path
+from threading import Thread, Event
+from uuid import UUID
 
-if 'win32' == sys.platform:
+# first party imports
+import bleachbit
+from bleachbit import FileUtilities, General, ARCH_BITS, IS_WINDOWS
+from bleachbit.Language import get_text as _
+
+if IS_WINDOWS:
     import winreg
     import pywintypes
     import win32api
+    import win32clipboard
     import win32con
     import win32file
     import win32gui
+    import win32process
     import win32security
 
-    from ctypes import windll, c_ulong, c_buffer, byref, sizeof
+    # Ensure GetClassInfo exists for compatibility and testing
+    # Some win32gui builds don't have GetClassInfo, so we create a stub
+    # In the future, consider GetClassInfoEx instead.
+    # The signature mirrors win32gui.GetClassInfo.
+    # pylint: disable-next=unused-argument
+    def _get_class_info_fallback(hInstance, className):
+        """Fallback GetClassInfo - returns a default atom value"""
+        return (1234,)  # Return tuple with default atom
+
+    # Force GetClassInfo to exist on the module for mocking compatibility
+    # This ensures tests can patch it even if it doesn't exist natively
+    setattr(win32gui, 'GetClassInfo', getattr(
+        win32gui, 'GetClassInfo', _get_class_info_fallback))
+
     from win32com.shell import shell, shellcon
 
-    psapi = windll.psapi
-    kernel = windll.kernel32
-
 logger = logging.getLogger(__name__)
+
+IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
+# IsReparseTagNameSurrogate(): set for symlinks and junctions
+IO_REPARSE_TAG_NAME_SURROGATE = 0x20000000
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+SPLASH_ICON_SIZE_PX = 256  # 256x256 pixels
+SPLASH_CLOSE_TIMEOUT_MS = 1000
+
+WINDOWS_SYSTEM_VAR = 'WindowsSystem'
+_WINDOWS_SYSTEM_VAR_RE = re.compile(
+    rf'%{WINDOWS_SYSTEM_VAR}%', flags=re.IGNORECASE)
+
+_delete_parent_lock_admin = None
+_delete_parent_lock_handle = None
+_delete_parent_lock_key = None
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [('x', wintypes.LONG), ('y', wintypes.LONG)]
+
+
+class _SIZE(ctypes.Structure):
+    _fields_ = [('cx', wintypes.LONG), ('cy', wintypes.LONG)]
+
+
+class _BLENDFUNCTION(ctypes.Structure):
+    _fields_ = [
+        ('BlendOp', wintypes.BYTE),
+        ('BlendFlags', wintypes.BYTE),
+        ('SourceConstantAlpha', wintypes.BYTE),
+        ('AlphaFormat', wintypes.BYTE),
+    ]
+
+
+class _BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [
+        ('biSize', wintypes.DWORD),
+        ('biWidth', wintypes.LONG),
+        ('biHeight', wintypes.LONG),
+        ('biPlanes', wintypes.WORD),
+        ('biBitCount', wintypes.WORD),
+        ('biCompression', wintypes.DWORD),
+        ('biSizeImage', wintypes.DWORD),
+        ('biXPelsPerMeter', wintypes.LONG),
+        ('biYPelsPerMeter', wintypes.LONG),
+        ('biClrUsed', wintypes.DWORD),
+        ('biClrImportant', wintypes.DWORD),
+    ]
+
+
+class _BITMAPINFO(ctypes.Structure):
+    _fields_ = [('bmiHeader', _BITMAPINFOHEADER),
+                ('bmiColors', wintypes.DWORD * 3)]
+
+
+_BI_RGB = 0
+_DIB_RGB_COLORS = 0
+_AC_SRC_OVER = 0
+_AC_SRC_ALPHA = 1
+_ULW_ALPHA = 2
+
+
+def get_splash_screen_delay_seconds():
+    value = os.environ.get('BLEACHBIT_SPLASH_SCREEN_DELAY')
+    if not value:
+        return 0.0
+    try:
+        delay = float(value)
+    except ValueError:
+        logger.warning(
+            'invalid BLEACHBIT_SPLASH_SCREEN_DELAY value: %r', value)
+        return 0.0
+    if delay < 0:
+        logger.warning(
+            'negative BLEACHBIT_SPLASH_SCREEN_DELAY value: %r', value)
+        return 0.0
+    return delay
+
+
+def _get_environ_case_insensitive(environ, varname):
+    """Get a Windows environment variable from a mapping."""
+    if varname in environ:
+        return environ[varname]
+    varname_lower = varname.lower()
+    for key, value in environ.items():
+        if key.lower() == varname_lower:
+            return value
+    return None
+
+
+def _is_64_bit_windows(environ):
+    """Return whether the environment indicates a 64-bit Windows OS."""
+    if _get_environ_case_insensitive(environ, 'ProgramW6432'):
+        return True
+    if _get_environ_case_insensitive(environ, 'PROCESSOR_ARCHITEW6432'):
+        return True
+    arch = _get_environ_case_insensitive(environ, 'PROCESSOR_ARCHITECTURE')
+    return bool(arch and arch.upper() in ('AMD64', 'ARM64', 'IA64'))
+
+
+def get_windows_system_paths(environ=None, process_bits=None):
+    """Return Windows system directories for native and 32-bit targets.
+
+    On a 32-bit process running on 64-bit Windows, System32 is redirected to
+    SysWOW64, so Sysnative is used for the native 64-bit system directory.
+
+    Returns:
+        list: A list of Windows system directory paths. On 64-bit Windows,
+              this typically includes both the native system directory
+              (System32 or Sysnative) and SysWOW64. On 32-bit Windows,
+              only System32 is returned. Returns an empty list if the
+              Windows directory cannot be determined.
+
+    """
+    environ = environ or os.environ
+    process_bits = process_bits or ARCH_BITS
+    windir = (_get_environ_case_insensitive(environ, 'WinDir') or
+              _get_environ_case_insensitive(environ, 'SystemRoot'))
+    if not windir:
+        return []
+    windir = windir.rstrip('\\/')
+    if _is_64_bit_windows(environ):
+        native = 'Sysnative' if process_bits == 32 else 'System32'
+        paths = (ntpath.join(windir, native), ntpath.join(windir, 'SysWOW64'))
+    else:
+        paths = (ntpath.join(windir, 'System32'), )
+
+    return list(paths)
+
+
+def expand_windows_system_vars(pathname, system_paths=None):
+    """Expand the multi-value %WindowsSystem% variable in a path.
+
+    Args:
+        pathname: The path string containing the %WindowsSystem% variable.
+        system_paths: Optional list of system paths to use. If not provided,
+                     the function will determine the appropriate system paths
+                     based on the current environment.
+
+    Returns:
+        list: A list of expanded path strings, one for each system path.
+    """
+    if not _WINDOWS_SYSTEM_VAR_RE.search(pathname):
+        return [pathname]
+    system_paths = system_paths or get_windows_system_paths()
+    if not system_paths:
+        return [pathname]
+    return [
+        _WINDOWS_SYSTEM_VAR_RE.sub(
+            lambda _match, system_path=system_path: system_path, pathname)
+        for system_path in system_paths
+    ]
 
 
 def browse_file(_, title):
     """Ask the user to select a single file.  Return full path"""
     try:
         ret = win32gui.GetOpenFileNameW(None,
+                                        # pylint: disable-next=possibly-used-before-assignment
                                         Flags=win32con.OFN_EXPLORER
                                         | win32con.OFN_FILEMUSTEXIST
                                         | win32con.OFN_HIDEREADONLY,
                                         Title=title)
+    # pylint: disable-next=possibly-used-before-assignment
     except pywintypes.error as e:
-        logger = logging.getLogger(__name__)
         if 0 == e.winerror:
             logger.debug('browse_file(): user cancelled')
         else:
@@ -104,26 +272,42 @@ def browse_files(_, title):
     if 1 == len(_split):
         # only one filename
         return _split
-    pathnames = []
     dirname = _split[0]
-    for fname in _split[1:]:
-        pathnames.append(os.path.join(dirname, fname))
-    return pathnames
+    return [os.path.join(dirname, fname) for fname in _split[1:]]
 
 
 def browse_folder(_, title):
     """Ask the user to select a folder.  Return full path."""
-    pidl = shell.SHBrowseForFolder(None, None, title)[0]
+    # pylint: disable-next=possibly-used-before-assignment
+    flags = shellcon.BIF_RETURNONLYFSDIRS | shellcon.BIF_EDITBOX
+    # pylint: disable-next=possibly-used-before-assignment
+    pidl = shell.SHBrowseForFolder(None, None, title, flags)[0]
     if pidl is None:
         # user cancelled
         return None
-    fullpath = shell.SHGetPathFromIDListW(pidl)
-    return fullpath
+    try:
+        return shell.SHGetPathFromIDListW(pidl)
+    except pywintypes.com_error:
+        # a virtual folder such as This PC, or a path over MAX_PATH
+        logger.exception('exception in browse_folder()')
+        return None
 
 
 def cleanup_nonce():
     """On exit, clean up GTK junk files"""
-    for fn in glob.glob(os.path.expandvars('%TEMP%\gdbus-nonce-file-*')):
+    if os.environ.get('BLEACHBIT_TEST_OPTIONS_DIR'):
+        # Under the test suite this runs at every worker and subprocess exit
+        # and deletes shared %TEMP% files with a %TEMP% parent lock, racing
+        # other workers.
+        return
+    # Like the tmp cleaner, keep recent ones another instance may still use
+    max_age_seconds = 7 * 24 * 60 * 60
+    for fn in glob.glob(os.path.expandvars(r'%TEMP%\gdbus-nonce-file-*')):
+        try:
+            if time.time() - os.stat(fn).st_mtime < max_age_seconds:
+                continue
+        except OSError:
+            continue
         logger.debug('cleaning GTK nonce file: %s', fn)
         FileUtilities.delete(fn)
 
@@ -132,7 +316,7 @@ def csidl_to_environ(varname, csidl):
     """Define an environment variable from a CSIDL for use in CleanerML and Winapp2.ini"""
     try:
         sppath = shell.SHGetSpecialFolderPath(None, csidl)
-    except:
+    except Exception:
         logger.info(
             'exception when getting special folder path for %s', varname)
         return
@@ -140,13 +324,194 @@ def csidl_to_environ(varname, csidl):
     set_environ(varname, sppath)
 
 
+def _delete_parent_lock_needed(pathname):
+    """
+    Check if a parent directory lock is needed.
+
+    This is only needed on Windows for administrator users
+    when the path is not in the user's profile directory.
+    """
+    if not IS_WINDOWS:
+        return False
+    # The admin check is cached for the process.
+    # pylint: disable-next=global-statement
+    global _delete_parent_lock_admin
+    if _delete_parent_lock_admin is None:
+        try:
+            _delete_parent_lock_admin = shell.IsUserAnAdmin()
+        except Exception:
+            logger.exception(
+                'error checking whether current user is an administrator')
+            _delete_parent_lock_admin = True
+    return _delete_parent_lock_admin and not _path_in_user_profile(pathname)
+
+
+def _path_for_comparison(pathname):
+    """
+    Normalize a path for comparison.
+    """
+    return os.path.normcase(os.path.abspath(
+        FileUtilities.extended_path_undo(pathname)))
+
+
+def _path_in_user_profile(pathname):
+    """
+    Check if a path is within the user's profile directory.
+    """
+    userprofile = os.environ.get('USERPROFILE')
+    if not userprofile:
+        return False
+    try:
+        profile_path = _path_for_comparison(userprofile)
+        compare_path = _path_for_comparison(pathname)
+        return os.path.commonpath((profile_path, compare_path)) == profile_path
+    except (OSError, ValueError):
+        return False
+
+
+def _delete_parent_directory(pathname):
+    """
+    Get the parent directory of a file or directory.
+    """
+    path = os.path.abspath(FileUtilities.extended_path_undo(pathname))
+    return FileUtilities.extended_path(os.path.dirname(path))
+
+
+def _close_delete_parent_lock():
+    """Close the parent lock handle."""
+    # The parent lock is process-wide state.
+    # pylint: disable-next=global-statement
+    global _delete_parent_lock_handle
+    # pylint: disable-next=global-statement
+    global _delete_parent_lock_key
+    if _delete_parent_lock_handle is not None:
+        logger.debug('Closing parent lock handle for %s',
+                     _delete_parent_lock_key)
+        # Forget it first, so a handle that fails to close is not retried
+        handle = _delete_parent_lock_handle
+        _delete_parent_lock_handle = None
+        _delete_parent_lock_key = None
+        # pylint: disable-next=possibly-used-before-assignment
+        win32file.CloseHandle(handle)
+
+
+def _check_delete_parent(handle, pathname):
+    """Refuse the parent locked by handle if it is a symlink or junction"""
+    try:
+        info = win32file.GetFileInformationByHandleEx(
+            handle, win32file.FileAttributeTagInfo)
+        attrs = info['FileAttributes']
+        is_link = info['ReparseTag'] & IO_REPARSE_TAG_NAME_SURROGATE
+    except pywintypes.error as e:
+        # Some devices have no tag (invalid function/parameter, not supported)
+        if e.winerror not in (1, 50, 87):
+            raise
+        attrs = win32file.GetFileInformationByHandle(handle)[0]
+        is_link = True
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT and is_link:
+        raise OSError(errno.EACCES,
+                      "Refusing to delete through a directory link",
+                      pathname)
+
+
+def _lock_delete_parent(pathname):
+    """
+    Lock the parent directory of pathname to prevent it from being deleted.
+
+    This function does not perform the deletion.
+    """
+    # The parent lock is process-wide state.
+    # pylint: disable-next=global-statement
+    global _delete_parent_lock_handle
+    # pylint: disable-next=global-statement
+    global _delete_parent_lock_key
+    parent = _delete_parent_directory(pathname)
+    parent_key = os.path.normcase(parent)
+    if _delete_parent_lock_handle is not None and _delete_parent_lock_key == parent_key:
+        logger.debug('Reusing parent lock handle for %s', parent_key)
+        # The lock does not stop an empty parent becoming a junction
+        try:
+            _check_delete_parent(_delete_parent_lock_handle, pathname)
+        except Exception:
+            _close_delete_parent_lock()
+            raise
+        return
+    _close_delete_parent_lock()
+    flags = win32con.FILE_FLAG_BACKUP_SEMANTICS | getattr(
+        win32con, 'FILE_FLAG_OPEN_REPARSE_POINT', 0x00200000)
+    # Share modes do not apply to attribute-only opens, so also list it
+    access = getattr(win32con, 'FILE_LIST_DIRECTORY', 0x1) | getattr(
+        win32con, 'FILE_READ_ATTRIBUTES', 0x80)
+    try:
+        handle = win32file.CreateFile(
+            parent,
+            access,
+            # No delete sharing, so it cannot be renamed, but its entries can
+            win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
+            None,
+            win32con.OPEN_EXISTING,
+            flags,
+            None)
+    except pywintypes.error as e:
+        raise OSError(errno.EACCES,
+                      "Access denied locking directory before delete()",
+                      pathname) from e
+    if handle == win32file.INVALID_HANDLE_VALUE:
+        raise OSError(errno.EACCES,
+                      "Access denied locking directory before delete()",
+                      pathname)
+    try:
+        _check_delete_parent(handle, pathname)
+    except Exception:
+        win32file.CloseHandle(handle)
+        raise
+    logger.debug('Opened parent lock handle for %s', parent_key)
+    _delete_parent_lock_handle = handle
+    _delete_parent_lock_key = parent_key
+
+
+def with_parent_lock(pathname, func, *args, **kwargs):
+    """
+    Run a function with a lock on the parent directory of pathname.
+
+    This prevents race conditions where the parent directory is deleted
+    while the function is running.
+
+    If args/kwargs are provided, passes them to func.
+    Otherwise, calls func() with no arguments.
+    """
+    if not _delete_parent_lock_needed(pathname):
+        return func(*args, **kwargs)
+    logger.debug('with_parent_lock(%s): acquiring lock', pathname)
+    _lock_delete_parent(pathname)
+    logger.debug('lock acquired: calling clean function with parent lock on %s',
+                 _delete_parent_lock_key)
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        _close_delete_parent_lock()
+        raise e from e
+
+
+if IS_WINDOWS:
+    atexit.register(_close_delete_parent_lock)
+
+
 def delete_locked_file(pathname):
     """Delete a file that is currently in use"""
-    if os.path.exists(pathname):
-        MOVEFILE_DELAY_UNTIL_REBOOT = 4
-        if 0 == windll.kernel32.MoveFileExW(pathname, None, MOVEFILE_DELAY_UNTIL_REBOOT):
-            from ctypes import WinError
-            raise WinError()
+    if not os.path.exists(pathname):
+        return
+    MOVEFILE_DELAY_UNTIL_REBOOT = 4
+    if 0 == ctypes.windll.kernel32.MoveFileExW(pathname, None, MOVEFILE_DELAY_UNTIL_REBOOT):
+        # WinError throws the right exception based on last error.
+        try:
+            raise ctypes.WinError()
+        except PermissionError as e:
+            # OSError has special handling in Worker.py
+            # Use a special message for flagging files for later deletion
+            raise OSError(
+                errno.EACCES,
+                "Access denied in delete_locked_file()", pathname) from e
 
 
 def delete_registry_value(key, value_name, really_delete):
@@ -155,88 +520,290 @@ def delete_registry_value(key, value_name, really_delete):
     successful.  If really_delete is False (meaning preview),
     just check whether the value exists."""
     (hive, sub_key) = split_registry_key(key)
-    if really_delete:
-        try:
-            hkey = winreg.OpenKey(hive, sub_key, 0, winreg.KEY_SET_VALUE)
-            winreg.DeleteValue(hkey, value_name)
-        except WindowsError as e:
-            if e.winerror == 2:
-                # 2 = 'file not found' means value does not exist
-                return False
-            raise
-        else:
-            return True
+    # Without KEY_WOW64_64KEY, WOW64 would send the x86 build's
+    # HKLM\Software to WOW6432Node. Elsewhere the flag changes nothing.
     try:
-        hkey = winreg.OpenKey(hive, sub_key)
-        winreg.QueryValueEx(hkey, value_name)
+        if really_delete:
+            # pylint: disable-next=possibly-used-before-assignment
+            hkey = winreg.OpenKey(
+                hive, sub_key, 0, winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY)
+            winreg.DeleteValue(hkey, value_name)
+        else:
+            hkey = winreg.OpenKey(
+                hive, sub_key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+            winreg.QueryValueEx(hkey, value_name)
+    except PermissionError as e:
+        raise OSError(
+            errno.EACCES,
+            "Access denied in delete_registry_value()", key) from e
+    # WindowsError is a real builtin; this file only runs on Windows.
+    # pylint: disable-next=undefined-variable
     except WindowsError as e:
-        if e.winerror == 2:
+        if e.winerror == errno.ENOENT:
+            # ENOENT = 'file not found' means value does not exist
             return False
         raise
-    else:
-        return True
+    return True
 
 
-def delete_registry_key(parent_key, really_delete):
+def delete_registry_key(parent_key, really_delete, excludekeys=None):
     """Delete registry key including any values and sub-keys.
     Return boolean whether found and success.  If really
     delete is False (meaning preview), just check whether
     the key exists."""
     parent_key = str(parent_key)  # Unicode to byte string
+    excludekeys = excludekeys or []
+
+    # Check if this key is excluded
+    for exclude_path in excludekeys:
+        # Normalize paths for comparison (case-insensitive)
+        normalized_parent = parent_key.upper()
+        normalized_exclude = exclude_path.upper()
+        # Check if the key matches the exclusion (exact match or is a child of exclusion)
+        if normalized_parent == normalized_exclude or \
+           normalized_parent.startswith(normalized_exclude + '\\'):
+            logger.debug('Skipping excluded registry key: %s', parent_key)
+            return False
+
     (hive, parent_sub_key) = split_registry_key(parent_key)
-    hkey = None
     try:
-        hkey = winreg.OpenKey(hive, parent_sub_key)
+        hkey = winreg.OpenKey(
+            hive, parent_sub_key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+    except PermissionError as e:
+        raise OSError(
+            errno.EACCES,
+            "Access denied in delete_registry_key()", parent_key) from e
+    # WindowsError is a real builtin; this file only runs on Windows.
+    # pylint: disable-next=undefined-variable
     except WindowsError as e:
         if e.winerror == 2:
             # 2 = 'file not found' happens when key does not exist
             return False
+        raise
     if not really_delete:
         return True
-    if not hkey:
-        # key not found
-        return False
     keys_size = winreg.QueryInfoKey(hkey)[0]
-    child_keys = []
-    for i in range(keys_size):
-        child_keys.append(parent_key + '\\' + winreg.EnumKey(hkey, i))
+    child_keys = [
+        parent_key + '\\' + winreg.EnumKey(hkey, i) for i in range(keys_size)
+    ]
+
+    # Check if any child keys are excluded
+    has_excluded_children = False
     for child_key in child_keys:
-        delete_registry_key(child_key, True)
-    winreg.DeleteKey(hive, parent_sub_key)
+        child_deleted = delete_registry_key(child_key, True, excludekeys)
+        if not child_deleted:
+            has_excluded_children = True
+
+    # If any child is excluded, preserve this parent key
+    if has_excluded_children:
+        logger.debug(
+            'Preserving parent key with excluded children: %s', parent_key)
+        return False
+
+    try:
+        winreg.DeleteKeyEx(hive, parent_sub_key, winreg.KEY_WOW64_64KEY)
+    except PermissionError as e:
+        raise OSError(
+            errno.EACCES,
+            "Access denied in delete_registry_key()", parent_key) from e
     return True
 
 
 def delete_updates():
-    """Returns commands for deleting Windows Updates files"""
-    windir = os.path.expandvars('$windir')
-    dirs = glob.glob(os.path.join(windir, '$NtUninstallKB*'))
-    dirs += [os.path.expandvars('$windir\\SoftwareDistribution\\Download')]
-    dirs += [os.path.expandvars('$windir\\ie7updates')]
-    dirs += [os.path.expandvars('$windir\\ie8updates')]
-    if not dirs:
-        # if nothing to delete, then also do not restart service
+    """Returns commands for deleting Windows Updates files
+
+    Reference:
+    https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/additional-resources-for-windows-update
+
+    Yields commands
+    """
+    # Import here to avoid a circular import.
+    from bleachbit import Command
+    if not shell.IsUserAnAdmin():
+        logger.warning(
+            # TRANSLATORS: Warning shown when cleaning Windows Updates without administrator access.
+            _("Administrator privileges are required to clean Windows Updates"))
         return
+    windir = os.path.expandvars('%windir%')
+    dirs = glob.glob(os.path.join(windir, '$NtUninstallKB*'))
+    for path_to_add in [r'%windir%\SoftwareDistribution.old',
+                        r'%windir%\SoftwareDistribution.bak',
+                        r'%windir%\ie7updates',
+                        r'%windir%\ie8updates',
+                        # see https://github.com/bleachbit/bleachbit/issues/1215 about catroot2
+                        # r'%WindowsSystem%\catroot2',
+                        r'%systemdrive%\windows.old',
+                        r'%systemdrive%\$windows.~bt',
+                        r'%systemdrive%\$windows.~ws']:
+        dirs.extend(os.path.expandvars(p)
+                    for p in expand_windows_system_vars(path_to_add))
 
-    import win32serviceutil
-    wu_running = win32serviceutil.QueryServiceStatus('wuauserv')[1] == 4
-
-    args = ['net', 'stop', 'wuauserv']
-
-    def wu_service():
-        General.run_external(args)
-        return 0
-    if wu_running:
-        yield Command.Function(None, wu_service, " ".join(args))
-
+    # First, delete objects that do not require services to be stopped.
     for path1 in dirs:
         for path2 in FileUtilities.children_in_directory(path1, True):
             yield Command.Delete(path2)
         if os.path.exists(path1):
             yield Command.Delete(path1)
 
-    args = ['net', 'start', 'wuauserv']
-    if wu_running:
-        yield Command.Function(None, wu_service, " ".join(args))
+    # Services whose stop command ran, so none in preview
+    stopped_services = []
+
+    # Closure to bind service/start into a zero-arg callback for Command.Function
+    def make_run_service(service, start):
+        def run_wu_service():
+            if not start:
+                # recorded first: the stop may be interrupted part way
+                stopped_services.append(service)
+            return run_net_service_command(service, start)
+        return run_wu_service
+
+    all_services = ('wuauserv', 'cryptsvc', 'bits', 'msiserver')
+    restart_services = []
+    try:
+        for service in all_services:
+            if is_service_running(service):
+                restart_services.append(service)
+        # Stopping a service also stops the ones that depend on it
+        for service in list(restart_services):
+            for dependent in get_running_dependent_services(service):
+                if dependent not in restart_services:
+                    restart_services.append(dependent)
+    # pylint: disable-next=possibly-used-before-assignment
+    except (RuntimeError, pywintypes.error) as e:
+        # Leave the services alone, but let the other options run
+        logger.warning('Not cleaning SoftwareDistribution: %s', e)
+        return
+    services_stopped = False
+    sdist_dir = os.path.expandvars(r'%windir%\SoftwareDistribution')
+    if not os.path.exists(sdist_dir):
+        return
+
+    try:
+        for path2 in FileUtilities.children_in_directory(sdist_dir, True):
+            # If we find any files, stop services.
+            if not services_stopped:
+                services_stopped = True
+                for service in restart_services:
+                    # TRANSLATORS: Message in log file when stopping a Windows service.
+                    # The placeholder is the code name of the service.
+                    label = _("stop Windows service %(service)s") % {
+                        'service': service}
+                    yield Command.Function(None, make_run_service(service, False), label)
+            yield Command.Delete(path2)
+        yield Command.Delete(sdist_dir)
+
+        if not services_stopped:
+            return
+
+        for service in restart_services:
+            # TRANSLATORS: Message in log file when starting a Windows service.
+            # The placeholder is the code name of the service.
+            label = _("start Windows service %(service)s") % {
+                'service': service}
+            yield Command.Function(None, make_run_service(service, True), label)
+    except BaseException:
+        # An abort closes this generator before the start commands run.
+        # A stop takes the dependents down with it, and starting a running
+        # service again is a no-op
+        for service in restart_services if stopped_services else ():
+            try:
+                run_net_service_command(service, True)
+            except RuntimeError as e:
+                logger.error(e)
+        raise
+
+
+def is_service_running(service):
+    """Return True if service is running."""
+    assert isinstance(service, str)
+    # Keep the service modules off the startup path: only cleaning needs them
+    import win32serviceutil
+    service_status_code = win32serviceutil.QueryServiceStatus(service)[1]
+    logger.debug('Windows service %s has current state %d',
+                 service, service_status_code)
+    # Throw error if status is pending.
+    if service_status_code not in (1, 4, 7):
+        raise RuntimeError(
+            f'Unexpected service status code: {service_status_code}')
+    return service_status_code == 4  # running
+
+
+def get_running_dependent_services(service):
+    """Return the running services that depend on this one, in start order"""
+    # Keep the service modules off the startup path: only cleaning needs them
+    import win32service
+    hscm = win32service.OpenSCManager(
+        None, None, win32service.SC_MANAGER_CONNECT)
+    try:
+        hs = win32service.OpenService(
+            hscm, service, win32service.SERVICE_ENUMERATE_DEPENDENTS)
+        try:
+            dependents = win32service.EnumDependentServices(
+                hs, win32service.SERVICE_ACTIVE)
+        finally:
+            win32service.CloseServiceHandle(hs)
+    finally:
+        win32service.CloseServiceHandle(hscm)
+    # EnumDependentServices lists them in stop order
+    return [name for name, _display_name, _status in reversed(dependents)]
+
+
+def run_net_service_command(service, start):
+    """Start or stop a Windows service
+
+    Args:
+        service (str): Service name, e.g. 'wuauserv'.
+        start (bool): True to start, False to stop.
+
+    Behavior:
+    - On success, return 0 because no space was freed.
+    - Treat "already running" (start) and "not active/not started" (stop) like a success.
+    - On other errors, raise RuntimeError.
+    - If service has dependencies, this will stop them too.
+
+    Reference:
+    - https://github.com/bleachbit/bleachbit/issues/1932
+    - https://github.com/bleachbit/bleachbit/issues/1854
+    """
+    assert isinstance(service, str)
+    assert isinstance(start, bool)
+    # Keep the service modules off the startup path: only cleaning needs them
+    import win32service
+    import win32serviceutil
+    if start:
+        action = win32serviceutil.StartService
+        ignore_codes = (1056,)  # already running
+        ignore_msgs = ('already',)
+        verb = 'start'
+        desired = win32service.SERVICE_RUNNING
+        state_txt = 'RUNNING'
+    else:
+        action = win32serviceutil.StopServiceWithDeps
+        ignore_codes = (
+            1052,  # ERROR_INVALID_SERVICE_CONTROL: control not valid for this service
+            1062,  # ERROR_SERVICE_NOT_ACTIVE: not active
+        )
+        ignore_msgs = ('not active', 'not been started', 'is not started',
+                       'control is not valid')
+        verb = 'stop'
+        state_txt = 'STOPPED'
+        desired = win32service.SERVICE_STOPPED
+
+    try:
+        action(service)
+    except pywintypes.error as e:
+        # Treat common benign states as success
+        msg = str(e).lower()
+        if getattr(e, 'winerror', None) in ignore_codes or any(s in msg for s in ignore_msgs):
+            return 0
+        raise RuntimeError(f'Failed to {verb} service {service}: {e}') from e
+
+    try:
+        win32serviceutil.WaitForServiceStatus(service, desired, 60)
+    except Exception as wait_err:
+        logger.info('WaitForServiceStatus(%s, %s, ...) had an issue: %s',
+                    service, state_txt, wait_err)
+    return 0
 
 
 def detect_registry_key(parent_key):
@@ -246,17 +813,51 @@ def detect_registry_key(parent_key):
     except UnicodeEncodeError:
         return False
     (hive, parent_sub_key) = split_registry_key(parent_key)
-    hkey = None
-    try:
-        hkey = winreg.OpenKey(hive, parent_sub_key)
-    except WindowsError as e:
-        if e.winerror == 2:
-            # 2 = 'file not found' happens when key does not exist
+    # A 32-bit app's HKLM\Software key is only in the 32-bit view
+    for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+        try:
+            winreg.OpenKey(hive, parent_sub_key, 0, winreg.KEY_READ | view)
+        # WindowsError is a real builtin; this file only runs on Windows.
+        # pylint: disable-next=undefined-variable
+        except WindowsError as e:
+            if e.winerror == 2:
+                # 2 = 'file not found' happens when key does not exist
+                continue
             return False
-    if not hkey:
-        # key not found
+        return True
+    return False
+
+
+def get_sid_token_48():
+    """Return a 48-bit token for the current user"""
+    # pylint: disable-next=possibly-used-before-assignment
+    htoken = win32security.OpenProcessToken(
+        # pylint: disable-next=possibly-used-before-assignment
+        win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
+    try:
+        token_user = win32security.GetTokenInformation(
+            htoken, win32security.TokenUser)
+        sid_obj = token_user[0]
+        sid_str = win32security.ConvertSidToStringSid(sid_obj)
+    finally:
+        win32file.CloseHandle(htoken)
+    digest = hashlib.blake2b(sid_str.encode('ascii'), digest_size=6).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b'=').decode('ascii')
+
+
+def is_ots_elevation():
+    """Return True if UAC changed credentials"""
+    if not IS_WINDOWS:
         return False
-    return True
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == '--uac-sid-token' and i + 1 < len(argv):
+            parent_token = argv[i + 1]
+            try:
+                return get_sid_token_48() != parent_token
+            except Exception:
+                return False
+    return False
 
 
 def elevate_privileges(uac):
@@ -269,33 +870,40 @@ def elevate_privileges(uac):
         htoken = win32security.OpenProcessToken(
             win32api.GetCurrentProcess(), win32security.TOKEN_ADJUST_PRIVILEGES | win32security.TOKEN_QUERY)
         newPrivileges = [
-            (win32security.LookupPrivilegeValue(None, "SeBackupPrivilege"), win32security.SE_PRIVILEGE_ENABLED),
-            (win32security.LookupPrivilegeValue(None, "SeRestorePrivilege"), win32security.SE_PRIVILEGE_ENABLED),
+            (win32security.LookupPrivilegeValue(None, "SeBackupPrivilege"),
+             win32security.SE_PRIVILEGE_ENABLED),
+            (win32security.LookupPrivilegeValue(None, "SeRestorePrivilege"),
+             win32security.SE_PRIVILEGE_ENABLED),
         ]
         win32security.AdjustTokenPrivileges(htoken, 0, newPrivileges)
         win32file.CloseHandle(htoken)
         return False
-    elif not uac:
+    if not uac:
         return False
 
     if hasattr(sys, 'frozen'):
         # running frozen in py2exe
         exe = sys.executable
-        parameters = "--gui --no-uac"
+        parameters = ['--gui', '--no-uac']
     else:
         pyfile = os.path.join(bleachbit.bleachbit_exe_path, 'bleachbit.py')
         # If the Python file is on a network drive, do not offer the UAC because
         # the administrator may not have privileges and user will not be
         # prompted.
-        if len(pyfile) > 0 and path_on_network(pyfile):
+        if pyfile and path_on_network(pyfile):
             logger.debug(
                 "debug: skipping UAC because '%s' is on network", pyfile)
             return False
-        parameters = '"%s" --gui --no-uac' % pyfile
+        parameters = [pyfile, '--gui', '--no-uac']
         exe = sys.executable
 
-    # add any command line parameters such as --debug-log
-    parameters = "%s %s" % (parameters, ' '.join(sys.argv[1:]))
+    try:
+        token = get_sid_token_48()
+        parameters = parameters + ['--uac-sid-token', token]
+    except Exception as e:
+        logger.error('could not compute SID token: %s', e)
+
+    parameters = _add_command_line_parameters(parameters)
 
     logger.debug('elevate_privileges() exe=%s, parameters=%s', exe, parameters)
 
@@ -308,8 +916,10 @@ def elevate_privileges(uac):
     except pywintypes.error as e:
         if 1223 == e.winerror:
             logger.debug('user denied the UAC dialog')
-            return False
-        raise
+        else:
+            # e.g., a policy that denies elevation, or Appinfo disabled
+            logger.warning('failed to elevate privileges: %s', e)
+        return False
 
     logger.debug('ShellExecuteEx=%s', rc)
 
@@ -317,6 +927,142 @@ def elevate_privileges(uac):
         return True
 
     return False
+
+
+def _add_command_line_parameters(parameters):
+    """Add any command line parameters such as --debug-log."""
+    import subprocess
+    # parameters already has --gui, so drop it from argv to avoid a duplicate
+    args = [arg for arg in sys.argv[1:] if arg != '--gui']
+    return subprocess.list2cmdline(parameters + args)
+
+
+def _current_user_sid():
+    """Return the PySID of the user running this process."""
+    token = win32security.OpenProcessToken(
+        win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
+    try:
+        return win32security.GetTokenInformation(
+            token, win32security.TokenUser)[0]
+    finally:
+        win32api.CloseHandle(token)
+
+
+def _is_path_acl_broken(path, user_sid):
+    """Return True if an OWNER RIGHTS ACE on path locks out user_sid, or
+    its ACL cannot be read."""
+    try:
+        sd = win32security.GetFileSecurity(
+            path, win32security.DACL_SECURITY_INFORMATION |
+            win32security.OWNER_SECURITY_INFORMATION)
+    except pywintypes.error as exc:
+        if getattr(exc, 'winerror', None) == 5:  # ERROR_ACCESS_DENIED
+            return True
+        raise
+    if sd.GetSecurityDescriptorOwner() == user_sid:
+        return False
+    dacl = sd.GetSecurityDescriptorDacl()
+    if dacl is None:
+        return False
+    owner_rights_sid = win32security.ConvertStringSidToSid('S-1-3-4')
+    return any(dacl.GetAce(i)[2] == owner_rights_sid
+               for i in range(dacl.GetAceCount()))
+
+
+def _is_single_link_file(path):
+    """Return True if path is not a hard link."""
+    try:
+        return os.lstat(path).st_nlink == 1
+    except OSError:
+        return False
+
+
+def _appdata_acl_targets(options_dir):
+    """Yield options_dir, the files directly in it, and the cleaners subtree.
+
+    Symlinks, junctions, and hard-linked files are skipped.
+    """
+    yield options_dir
+    try:
+        entries = list(os.scandir(options_dir))
+    except OSError:
+        return
+    for entry in entries:
+        if entry.is_symlink():
+            continue
+        if entry.is_file(follow_symlinks=False) and _is_single_link_file(entry.path):
+            yield entry.path
+    cleaners_dir = os.path.join(options_dir, 'cleaners')
+    if os.path.isdir(cleaners_dir) and not os.path.islink(cleaners_dir):
+        yield cleaners_dir
+        for root, dirs, files in os.walk(cleaners_dir, followlinks=False):
+            for name in dirs:
+                target = os.path.join(root, name)
+                if not os.path.islink(target):
+                    yield target
+            for name in files:
+                target = os.path.join(root, name)
+                if not os.path.islink(target) and _is_single_link_file(target):
+                    yield target
+
+
+def has_broken_appdata_acl(options_dir=None, user_sid=None):
+    """Return True if options_dir (or a child) locks out user_sid.
+
+    Before commit c3007aa0e818e905abb3dcb3035cb3dd40b715d1, General.makedirs()
+    called os.mkdir(path, 0o700), which on Windows sets a protected DACL with
+    an OWNER RIGHTS ACE. If an elevated process created the directory, its
+    owner is Administrators, and non-elevated processes are locked out
+    (issue #2401). A 0o700 directory owned by the user works, so it is not
+    flagged.
+
+    user_sid defaults to the user running this process.
+    """
+    if not IS_WINDOWS:
+        return False
+    if options_dir is None:
+        if bleachbit.portable_mode:
+            return False
+        options_dir = bleachbit.options_dir
+    if not options_dir or not os.path.exists(options_dir) or os.path.islink(options_dir):
+        return False
+    if user_sid is None:
+        user_sid = _current_user_sid()
+    for target in _appdata_acl_targets(options_dir):
+        if _is_path_acl_broken(target, user_sid):
+            return True
+    return False
+
+
+def fix_appdata_acl(options_dir=None):
+    """Reset the DACL on options_dir and its children to inherit from the parent.
+
+    Equivalent to ``icacls "%APPDATA%\\BleachBit" /reset /T``.
+    """
+    if not IS_WINDOWS:
+        return
+    if options_dir is None:
+        if bleachbit.portable_mode:
+            return
+        options_dir = bleachbit.options_dir
+    if not options_dir or not os.path.exists(options_dir) or os.path.islink(options_dir):
+        return
+    empty_dacl = win32security.ACL()
+    flags = (win32security.DACL_SECURITY_INFORMATION |
+             win32security.UNPROTECTED_DACL_SECURITY_INFORMATION)
+    failed = []
+    for target in _appdata_acl_targets(options_dir):
+        try:
+            win32security.SetNamedSecurityInfo(
+                target, win32security.SE_FILE_OBJECT, flags,
+                None, None, empty_dacl, None)
+        except Exception:
+            failed.append(target)
+            logger.exception('Error resetting ACL on %s', target)
+    if failed:
+        raise OSError(
+            f'Failed to reset ACL on {len(failed)} path(s), '
+            f'first: {failed[0]}')
 
 
 def empty_recycle_bin(path, really_delete):
@@ -327,28 +1073,77 @@ def empty_recycle_bin(path, really_delete):
     Keyword arguments:
     path          -- A drive, folder or None.  None refers to all recycle bins.
     really_delete -- If True, then delete.  If False, then just preview.
+
+    Returns:
+    The number of bytes that were freed or would be freed.
     """
-    (bytes_used, num_files) = shell.SHQueryRecycleBin(path)
+    (recycle_bin_size, num_files) = shell.SHQueryRecycleBin(path)
     if really_delete and num_files > 0:
         # Trying to delete an empty Recycle Bin on Vista/7 causes a
         # 'catastrophic failure'
+        # pylint: disable-next=possibly-used-before-assignment
         flags = shellcon.SHERB_NOSOUND | shellcon.SHERB_NOCONFIRMATION | shellcon.SHERB_NOPROGRESSUI
-        shell.SHEmptyRecycleBin(None, path, flags)
-    return bytes_used
+        try:
+            shell.SHEmptyRecycleBin(None, path, flags)
+        except Exception:
+            logger.exception(
+                'error in SHEmptyRecycleBin(): recycle_bin_size=%s, num_files=%r, path=%r',
+                FileUtilities.bytes_to_human(recycle_bin_size), num_files, path)
+            raise
+    return recycle_bin_size
+
+
+def flush_dns():
+    """Flush the DNS resolver cache
+
+    Returns 0 on success.
+    Raises RuntimeError on failure.
+    """
+    ipconfig = os.path.join(get_windows_system_paths()[0], 'ipconfig.exe')
+    args = [ipconfig, '/flushdns']
+    (rc, stdout, stderr) = General.run_external(args)
+    if 0 != rc:
+        raise RuntimeError(
+            f'Command: {args}\nReturn code: {rc}\nStdout: {stdout}\nStderr: {stderr}')
+    return 0
+
+
+def clear_clipboard():
+    """Clear the clipboard"""
+    _open_clipboard()
+    try:
+        # pylint: disable-next=possibly-used-before-assignment
+        win32clipboard.EmptyClipboard()
+    except Exception:
+        logger.exception('error clearing clipboard')
+    finally:
+        win32clipboard.CloseClipboard()
 
 
 def get_clipboard_paths():
     """Return a tuple of Unicode pathnames from the clipboard"""
-    import win32clipboard
-    win32clipboard.OpenClipboard()
-    path_list = ()
+    _open_clipboard()
     try:
         path_list = win32clipboard.GetClipboardData(win32clipboard.CF_HDROP)
     except TypeError:
-        pass
+        # the clipboard holds something that is not a file drop
+        path_list = ()
     finally:
         win32clipboard.CloseClipboard()
     return path_list
+
+
+def _open_clipboard(timeout=1.0):
+    """Open the clipboard with retry logic"""
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return win32clipboard.OpenClipboard()
+        except pywintypes.error as e:
+            winerror = getattr(e, 'winerror', e.args[0] if e.args else None)
+            if winerror != 5 or time.time() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 def get_fixed_drives():
@@ -371,9 +1166,6 @@ def get_known_folder_path(folder_name):
     Based on the code Michael Kropat (mkropat) from
     <https://gist.github.com/mkropat/7550097>
     licensed  under the GNU GPL"""
-    import ctypes
-    from ctypes import wintypes
-    from uuid import UUID
 
     class GUID(ctypes.Structure):
         _fields_ = [
@@ -393,16 +1185,17 @@ def get_known_folder_path(folder_name):
     class FOLDERID:
         LocalAppDataLow = UUID(
             '{A520A1A4-1780-4FF6-BD18-167343C5AF16}')
+        Fonts = UUID('{FD228CB7-AE11-4AE3-864C-16F3910AB8FE}')
 
     class UserHandle:
         current = wintypes.HANDLE(0)
 
-    _CoTaskMemFree = windll.ole32.CoTaskMemFree
+    _CoTaskMemFree = ctypes.windll.ole32.CoTaskMemFree
     _CoTaskMemFree.restype = None
     _CoTaskMemFree.argtypes = [ctypes.c_void_p]
 
     try:
-        _SHGetKnownFolderPath = windll.shell32.SHGetKnownFolderPath
+        _SHGetKnownFolderPath = ctypes.windll.shell32.SHGetKnownFolderPath
     except AttributeError:
         # Not supported on Windows XP
         return None
@@ -425,6 +1218,46 @@ def get_known_folder_path(folder_name):
     return path
 
 
+def get_recycle_bin_metadata(path):
+    """Return the metadata sibling of a top-level recycled payload, if any."""
+    path = FileUtilities.extended_path_undo(os.path.normpath(path))
+    drive, tail = os.path.splitdrive(path)
+    parts = tail.split(os.sep)
+    if not drive or len(parts) != 4:
+        return None
+    if (parts[0] == ''
+            and parts[1].lower() == '$recycle.bin'
+            and parts[2][:2].lower() == 's-'
+            and parts[3][:2].lower() == '$r'):
+        return os.path.join(os.path.dirname(path), '$I' + parts[3][2:])
+    return None
+
+
+def get_recycle_bin_orphaned_metadata():
+    """Yield (metadata, payload) for this user's old orphaned bin records."""
+    sid = win32security.ConvertSidToStringSid(_current_user_sid())
+    for drive in get_fixed_drives():
+        bin_dir = os.path.join(drive, '$Recycle.Bin')
+        user_dir = os.path.join(bin_dir, sid)
+        if (not FileUtilities.is_normal_directory(bin_dir)
+                or not FileUtilities.is_normal_directory(user_dir)):
+            continue
+        try:
+            with os.scandir(FileUtilities.extended_path(user_dir)) as entries:
+                for entry in entries:
+                    if (entry.name[:2].lower() != '$i'
+                            or not entry.is_file(follow_symlinks=False)):
+                        continue
+                    payload = os.path.join(user_dir, '$R' + entry.name[2:])
+                    try:
+                        os.lstat(FileUtilities.extended_path(payload))
+                    except FileNotFoundError:
+                        yield os.path.join(user_dir, entry.name), payload
+        except OSError:
+            logger.debug('Cannot inspect recycle-bin metadata in %s',
+                         user_dir, exc_info=True)
+
+
 def get_recycle_bin():
     """Yield a list of files in the recycle bin"""
     pidl = shell.SHGetSpecialFolderLocation(0, shellcon.CSIDL_BITBUCKET)
@@ -432,14 +1265,14 @@ def get_recycle_bin():
     h = desktop.BindToObject(pidl, None, shell.IID_IShellFolder)
     for item in h:
         path = h.GetDisplayNameOf(item, shellcon.SHGDN_FORPARSING)
-        if os.path.isdir(path):
+        if FileUtilities.is_normal_directory(path):
             # Return the contents of a normal directory, but do
             # not recurse Windows symlinks in the Recycle Bin.
-            for child in FileUtilities.children_in_directory(path, True):
-                yield child
+            yield from FileUtilities.children_in_directory(path, True)
         yield path
 
 
+@functools.lru_cache(maxsize=None)
 def get_windows_version():
     """Get the Windows major and minor version in a decimal like 10.0"""
     v = win32api.GetVersionEx(0)
@@ -448,32 +1281,111 @@ def get_windows_version():
 
 
 def is_junction(path):
-    """Check whether the path is a link
+    """Check whether the path is a junction (mount point) on Windows.
 
-    On Python 2.7 the function os.path.islink() always returns False,
-    so this is needed
+    https://docs.python.org/3/library/os.path.html#os.path.isjunction
     """
-    FILE_ATTRIBUTE_REPARSE_POINT = 0x400
-    attr = windll.kernel32.GetFileAttributesW(path)
+    if not IS_WINDOWS:
+        return False
+    # os.path.isjunction() was added in Python 3.12. Below that, read the
+    # reparse tag ourselves.
+    # TODO: drop this fallback once the minimum Python version is 3.12+
+    if hasattr(os.path, 'isjunction'):
+        return os.path.isjunction(path)
+
+    # Get reparse tag from stat result
+    try:
+        stat_result = os.stat(path, follow_symlinks=False)
+        tag = getattr(stat_result, 'st_reparse_tag', None)
+        if tag is not None:
+            return tag == IO_REPARSE_TAG_MOUNT_POINT
+    except (OSError, AttributeError) as e:
+        logger.debug('no reparse tag for %s, so falling back to '
+                     'GetFileAttributesW: %s', path, e)
+
+    attr = ctypes.windll.kernel32.GetFileAttributesW(path)
+    # INVALID_FILE_ATTRIBUTES (0xFFFFFFFF) indicates GetFileAttributesW failed
+    # On 64-bit Python, ctypes may interpret this as signed -1 instead of unsigned 0xFFFFFFFF
+    if attr in (0xFFFFFFFF, -1):
+        error_code = ctypes.windll.kernel32.GetLastError()
+        logger.error(
+            'GetFileAttributesW() failed for path %s with error code %d', path, error_code)
+        return False
     return bool(attr & FILE_ATTRIBUTE_REPARSE_POINT)
 
 
+def load_i18n_dll():
+    """Load internationalization library
 
-def is_process_running(name):
-    """Return boolean whether process (like firefox.exe) is running
+    BleachBit 4.6.2 with Python 3.4 and GTK 3.18 had libintl-8.dll.
 
-    Works on Windows Vista or later, but on Windows XP gives an ImportError
+    BleachBit 5.0.0 with Python 3.10 and GTK 3.24 built on vcpkg
+    has intl-8.dll.
+
+    Either way, it comes from gettext.
+
+    Returns None if the dll is not available.
     """
+    dirs = set([bleachbit.bleachbit_exe_path, os.path.dirname(sys.executable)])
+    lib_path = None
+    for dirname in dirs:
+        lib_path = os.path.join(dirname, 'intl-8.dll')
+        if os.path.exists(lib_path):
+            break
+    if not lib_path:
+        logger.warning(
+            'internationalization library was not found, so translations will not work.')
+        return None
+    try:
+        libintl = ctypes.cdll.LoadLibrary(lib_path)
+    except Exception as e:
+        logger.warning('error in LoadLibrary(%s): %s', lib_path, e)
+        return None
 
-    import psutil
-    name = name.lower()
-    for proc in psutil.process_iter():
-        try:
-            if proc.name().lower() == name:
-                return True
-        except psutil.NoSuchProcess:
-            pass
-    return False
+    # Configure DLL function prototypes
+    libintl.bindtextdomain.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    libintl.bindtextdomain.restype = ctypes.c_char_p
+    libintl.bind_textdomain_codeset.argtypes = [
+        ctypes.c_char_p, ctypes.c_char_p]
+    libintl.textdomain.argtypes = [ctypes.c_char_p]
+
+    if hasattr(libintl, "libintl_wbindtextdomain"):
+        libintl.libintl_wbindtextdomain.argtypes = [
+            ctypes.c_char_p, ctypes.c_wchar_p]
+        libintl.libintl_wbindtextdomain.restype = ctypes.c_wchar_p
+
+    return libintl
+
+
+def flush_gettext_cache(libintl=None):
+    """Force GNU libintl to reload message catalogs after a language change.
+
+    libintl caches the loaded .mo file per text domain. Changing LANG or
+    LANGUAGE (or calling bindtextdomain again) does not by itself reload
+    that cache on Windows. GNU gettext exposes `_nl_msg_cat_cntr` for this:
+    incrementing it invalidates the catalog cache so the next dgettext /
+    Gtk.Builder translation lookup reloads for the new language.
+
+    Returns True if the counter was incremented.
+    """
+    if libintl is None:
+        libintl = load_i18n_dll()
+    if not libintl:
+        logger.warning(
+            'Could not flush gettext cache: intl-8.dll is not loaded.')
+        return False
+    if not hasattr(libintl, '_nl_msg_cat_cntr'):
+        logger.warning(
+            'Could not flush gettext cache: _nl_msg_cat_cntr is not exported '
+            'by this libintl. Language changes will not take effect (issue #1801).')
+        return False
+    try:
+        cntr = ctypes.c_int.in_dll(libintl, '_nl_msg_cat_cntr')
+        cntr.value += 1
+        return True
+    except (ValueError, AttributeError, TypeError) as e:
+        logger.debug('Could not flush gettext cache: %s', e)
+        return False
 
 
 def move_to_recycle_bin(path):
@@ -495,9 +1407,9 @@ def parse_windows_build(build=None):
 
 def path_on_network(path):
     """Check whether 'path' is on a network drive"""
-    if len(os.path.splitunc(path)[0]) > 0:
+    drive = os.path.splitdrive(path)[0]
+    if drive.startswith(r'\\'):
         return True
-    drive = os.path.splitdrive(path)[0] + '\\'
     return win32file.GetDriveType(drive) == win32file.DRIVE_REMOTE
 
 
@@ -515,8 +1427,8 @@ def set_environ(varname, path):
     if not path:
         return
     if varname in os.environ:
-        #logger.debug('set_environ(%s, %s): skipping because environment variable is already defined', varname, path)
-        if 'nt' == os.name:
+        # logger.debug('set_environ(%s, %s): skipping because environment variable is already defined', varname, path)
+        if IS_WINDOWS:
             os.environ[varname] = os.path.expandvars('%%%s%%' % varname)
         # Do not redefine the environment variable when it already exists
         # But re-encode them with utf-8 instead of mbcs
@@ -526,13 +1438,15 @@ def set_environ(varname, path):
             raise RuntimeError(
                 'Variable %s points to a non-existent path %s' % (varname, path))
         os.environ[varname] = path
-    except:
+    except Exception:
         logger.exception(
             'set_environ(%s, %s): exception when setting environment variable', varname, path)
 
 
 def setup_environment():
-    """Define any extra environment variables for use in CleanerML and Winapp2.ini"""
+    """Define any extra environment variables"""
+
+    # These variables are for use in CleanerML and Winapp2.ini.
     csidl_to_environ('commonappdata', shellcon.CSIDL_COMMON_APPDATA)
     csidl_to_environ('documents', shellcon.CSIDL_PERSONAL)
     # Windows XP does not define localappdata, but Windows Vista and 7 do
@@ -545,7 +1459,7 @@ def setup_environment():
     # SHGetKnownFolderPath in Windows Vista and later
     try:
         path = get_known_folder_path('LocalAppDataLow')
-    except:
+    except Exception:
         logger.exception('exception identifying LocalAppDataLow')
     else:
         set_environ('LocalAppDataLow', path)
@@ -553,6 +1467,30 @@ def setup_environment():
     # BleachBit is portable. It is the same variable name as defined by
     # cmd.exe .
     set_environ('cd', os.getcwd())
+
+    # XDG_DATA_DIRS environment variable needs to be set with both GTK icons and
+    # `glib-2.0\schemas\gschemas.compiled`.
+    # The latter is required by the make chaff dialog.
+    # https://github.com/bleachbit/bleachbit/issues/1444
+    # https://github.com/bleachbit/bleachbit/issues/1780
+    if os.environ.get('XDG_DATA_DIRS'):
+        return
+    xdg_data_dirs = [os.path.dirname(sys.executable) +
+                     '\\share',
+                     os.getcwd() + '\\share']
+
+    found_dir = False
+    for xdg_data_dir in xdg_data_dirs:
+        xdg_data_fn = os.path.join(
+            xdg_data_dir, 'glib-2.0', 'schemas', 'gschemas.compiled')
+        if os.path.exists(xdg_data_fn):
+            found_dir = True
+            break
+    if found_dir:
+        logger.debug('XDG_DATA_DIRS=%s', xdg_data_dir)
+        set_environ('XDG_DATA_DIRS', xdg_data_dir)
+    else:
+        logger.warning('XDG_DATA_DIRS not set and gschemas.compiled not found')
 
 
 def split_registry_key(full_key):
@@ -568,3 +1506,646 @@ def split_registry_key(full_key):
     if k1 not in hive_map:
         raise RuntimeError("Invalid Windows registry hive '%s'" % k1)
     return hive_map[k1], k2
+
+
+def read_registry_key(full_key, value_name):
+    try:
+        (hive, sub_key) = split_registry_key(full_key)
+    except RuntimeError:
+        return None
+    try:
+        with winreg.OpenKey(hive, sub_key, 0,
+                            winreg.KEY_QUERY_VALUE | winreg.KEY_WOW64_64KEY) as hkey:
+            (reg_value, reg_type) = winreg.QueryValueEx(hkey, value_name)
+            if reg_type in (winreg.REG_EXPAND_SZ, winreg.REG_SZ):
+                return reg_value
+            return None
+    except OSError as e:
+        if e.winerror == errno.ENOENT:
+            # ENOENT = 'file not found' means value does not exist
+            return None
+        raise
+
+
+def symlink_or_copy(src, dst):
+    """Symlink with fallback to copy
+
+    Symlink is faster and uses virtually no storage, but it it requires administrator
+    privileges or Windows developer mode.
+
+    If symlink is not available, just copy the file.
+    """
+    try:
+        os.symlink(src, dst)
+        logger.debug('linked %s to %s', src, dst)
+    except (PermissionError, OSError):
+        shutil.copy(src, dst)
+        logger.debug('copied %s to %s', src, dst)
+
+
+def has_fontconfig_cache(font_conf_file):
+    # Keep minidom out of module scope: FileUtilities imports Windows on every
+    # Windows run, and this is the only function that needs it.
+    import xml.dom.minidom  # pylint: disable=import-outside-toplevel
+    with open(font_conf_file, 'rb') as f:
+        data = f.read()
+    General.reject_xml_dtd(data, 'fonts.conf')
+    dom = xml.dom.minidom.parseString(data)
+    fc_element = dom.getElementsByTagName('fontconfig')[0]
+    expanded_localdata = os.path.expandvars('%LOCALAPPDATA%')
+    expanded_homepath = os.path.join(os.path.expandvars(
+        '%HOMEDRIVE%'), os.path.expandvars('%HOMEPATH%'))
+    for dir_element in fc_element.getElementsByTagName('cachedir'):
+
+        if dir_element.firstChild.nodeValue == 'LOCAL_APPDATA_FONTCONFIG_CACHE':
+            dirpath = os.path.join(expanded_localdata, 'fontconfig', 'cache')
+        elif dir_element.firstChild.nodeValue == 'fontconfig' and dir_element.getAttribute('prefix') == 'xdg':
+            dirpath = os.path.join(expanded_homepath, '.cache', 'fontconfig')
+        elif dir_element.firstChild.nodeValue == '~/.fontconfig':
+            dirpath = os.path.join(expanded_homepath, '.fontconfig')
+        elif dir_element.firstChild.nodeValue.startswith('/'):
+            # fontconfig puts its install folder, which holds etc\fonts,
+            # in front of a path starting with /
+            prefix = os.path.dirname(os.path.dirname(
+                os.path.dirname(font_conf_file)))
+            dirpath = os.path.normpath(os.path.join(
+                prefix, dir_element.firstChild.nodeValue.lstrip('/')))
+        else:
+            # user has entered a custom directory
+            dirpath = dir_element.firstChild.nodeValue
+
+        # Match any cache version (fontconfig 2.17 writes .cache-9)
+        if dirpath and glob.glob(
+                os.path.join(glob.escape(dirpath), '*.cache-*')):
+            return True
+
+    return False
+
+
+def get_font_conf_file():
+    """Return the full path to fonts.conf
+
+    This function should be called only on Windows with GTK
+    """
+    if not IS_WINDOWS:
+        raise RuntimeError("get_font_conf_file() requires Windows")
+    from bleachbit.GtkShim import gtk_may_be_available
+    if not gtk_may_be_available():
+        raise RuntimeError("get_font_conf_file() requires GTK")
+    if hasattr(sys, 'frozen'):
+        # running inside py2exe
+        return os.path.join(bleachbit.bleachbit_exe_path, 'etc', 'fonts', 'fonts.conf')
+
+    import gi
+    gnome_dir = os.path.join(os.path.dirname(
+        os.path.dirname(gi.__file__)), 'gnome')
+    if not os.path.isdir(gnome_dir):
+        # BleachBit is running from a stand-alone Python installation.
+        gnome_dir = os.path.join(sys.exec_prefix, '..', '..')
+    return os.path.join(gnome_dir, 'etc', 'fonts', 'fonts.conf')
+
+
+if IS_WINDOWS:
+    # ctypes caches this on the DLL, so set argtypes once
+    _peek_message = ctypes.windll.user32.PeekMessageW
+    _peek_message.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND,
+                              wintypes.UINT, wintypes.UINT, wintypes.UINT]
+
+# Under the 300 ms default timeout for low-level hooks
+_SPLASH_PUMP_SECONDS = 0.01
+
+
+class SplashThread(Thread):
+    _class_atom = None
+
+    def __init__(self, group=None, name=None, args=(), kwargs=None):
+        super().__init__(group, self._show_splash_screen, name, args, kwargs)
+        self.daemon = True
+        self._splash_screen_started = Event()
+        self._splash_screen_closed = Event()
+        self._splash_screen_handle = None
+        self._splash_screen_height = None
+        self._splash_screen_width = None
+        self._startup_error = None
+        self._thread_id = None
+
+    def start(self):
+        if self.ident is not None:
+            logger.debug('SplashThread was already started')
+            return
+        try:
+            Thread.start(self)
+        except RuntimeError:
+            logger.debug('SplashThread could not be started', exc_info=True)
+            return
+        started = self._wait_started(timeout=10)
+        if not started:
+            logger.warning('SplashThread did not start within timeout')
+        else:
+            logger.debug('SplashThread started')
+
+        if self._startup_error:
+            logger.debug('Splash screen disabled due to startup error')
+
+    def _wait_started(self, timeout):
+        """Wait for the splash window, running messages sent to this thread"""
+        msg = wintypes.MSG()
+        deadline = time.monotonic() + timeout
+        while not self._splash_screen_started.wait(_SPLASH_PUMP_SECONDS):
+            if time.monotonic() >= deadline:
+                return False
+            # Run GDK's keyboard hook, which the splash's ALT keys wait on.
+            # PM_NOREMOVE leaves posted messages for GTK.
+            # pylint: disable-next=possibly-used-before-assignment
+            _peek_message(ctypes.byref(msg), None, 0, 0, win32con.PM_NOREMOVE)
+        return True
+
+    def run(self):
+        try:
+            self._thread_id = win32api.GetCurrentThreadId()
+            self._splash_screen_handle = self._show_splash_screen()
+        except Exception as exc:
+            self._startup_error = exc
+            logger.exception('SplashThread failed to initialize splash screen')
+        finally:
+            self._splash_screen_started.set()
+
+        if self._startup_error:
+            self._splash_screen_closed.set()
+            return
+
+        # Dispatch messages
+        try:
+            win32gui.PumpMessages()
+        except Exception:
+            logger.exception('SplashThread message pump failed')
+        finally:
+            self._splash_screen_handle = None
+            self._splash_screen_closed.set()
+
+    def join(self, timeout=None):
+        self.close(timeout)
+
+    def close(self, timeout=None):
+        if not self.is_alive():
+            return
+        splash_delay = get_splash_screen_delay_seconds()
+        if splash_delay > 0:
+            logger.debug(
+                'Delaying splash screen close by %s seconds', splash_delay)
+            time.sleep(splash_delay)
+        self._request_close()
+        Thread.join(self, timeout=timeout)
+
+    def _request_close(self):
+        """Ask the splash window to close without risking a GUI crash."""
+        if not self._splash_screen_handle:
+            self._post_quit_message()
+            return
+
+        hWindow = self._splash_screen_handle
+        try:
+            if not win32gui.IsWindow(hWindow):
+                self._splash_screen_handle = None
+                self._post_quit_message()
+                return
+        except Exception:
+            logger.debug(
+                'Could not verify splash screen window', exc_info=True)
+
+        self._hide_window(hWindow)
+        if self._send_close_message(hWindow):
+            return
+
+        try:
+            win32gui.PostMessage(hWindow, win32con.WM_CLOSE, 0, 0)
+        except Exception:
+            logger.debug('Failed to post close message to splash screen',
+                         exc_info=True)
+            self._post_quit_message()
+
+    def _hide_window(self, hWindow):
+        """Hide the splash window before closing it."""
+        try:
+            show_window_async = ctypes.windll.user32.ShowWindowAsync
+            show_window_async.argtypes = [wintypes.HWND, ctypes.c_int]
+            show_window_async.restype = wintypes.BOOL
+            show_window_async(wintypes.HWND(hWindow), win32con.SW_HIDE)
+        except Exception:
+            logger.debug('Failed to hide splash screen', exc_info=True)
+
+    def _send_close_message(self, hWindow):
+        """Synchronously close the splash window with a timeout."""
+        flags = getattr(win32con, 'SMTO_ABORTIFHUNG', 0x0002)
+        try:
+            send_message_timeout_w = ctypes.windll.user32.SendMessageTimeoutW
+            send_message_timeout_w.argtypes = [
+                wintypes.HWND,
+                wintypes.UINT,
+                wintypes.WPARAM,
+                wintypes.LPARAM,
+                wintypes.UINT,
+                wintypes.UINT,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            send_message_timeout_w.restype = wintypes.LPARAM
+            message_result = ctypes.c_void_p()
+            result = send_message_timeout_w(
+                wintypes.HWND(hWindow), win32con.WM_CLOSE, 0, 0, flags,
+                SPLASH_CLOSE_TIMEOUT_MS, ctypes.byref(message_result))
+            if result:
+                return True
+            logger.debug('SendMessageTimeoutW failed: %s',
+                         ctypes.get_last_error())
+        except Exception:
+            logger.debug('Failed to send close message with ctypes',
+                         exc_info=True)
+
+        return False
+
+    def _post_quit_message(self):
+        """Exit the splash message pump when the window cannot be addressed."""
+        if self._thread_id is None:
+            return
+        post_thread_message = getattr(win32api, 'PostThreadMessage', None)
+        if post_thread_message is None:
+            return
+        try:
+            post_thread_message(self._thread_id, win32con.WM_QUIT, 0, 0)
+        except Exception:
+            logger.debug('Failed to post quit message to splash thread',
+                         exc_info=True)
+
+    def get_icon_path(self):
+        """Return the full path to icon file"""
+        if hasattr(sys, 'frozen'):
+            # running frozen in py2exe
+            icon_dir = Path(sys.argv[0]).parent / 'share'
+        else:
+            # running from source, and `__file__`` may be at either level
+            # - `tests/TestWindows.py`
+            # - `bleachbit.py``
+            module_dir = Path(__file__).absolute().parent
+            icon_dir = module_dir / 'windows'
+            icon_path = module_dir / 'bleachbit.ico'
+            if not icon_path.exists():
+                icon_dir = module_dir.parent / 'windows'
+        return (icon_dir / 'bleachbit.ico').absolute()
+
+    def calculate_window_position(self, display_width, display_height):
+        """Calculate centered window position and size"""
+        x = (display_width - SPLASH_ICON_SIZE_PX) // 2
+        y = (display_height - SPLASH_ICON_SIZE_PX) // 2
+        return (x, y, SPLASH_ICON_SIZE_PX, SPLASH_ICON_SIZE_PX)
+
+    def _render_splash(self, hWnd):
+        """Load image and render the splash screen"""
+        filename = self.get_icon_path()
+        if not filename.exists():
+            logger.warning(
+                'Icon file not found: %s with current working directory: %s.', filename, os.getcwd())
+            return
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        icon_size = SPLASH_ICON_SIZE_PX
+        flags = win32con.LR_LOADFROMFILE
+        hIcon = win32gui.LoadImage(
+            0, str(filename), win32con.IMAGE_ICON, icon_size, icon_size, flags)
+        if not hIcon:
+            return
+
+        user32.UpdateLayeredWindow.argtypes = [
+            wintypes.HWND,
+            wintypes.HDC,
+            ctypes.POINTER(_POINT),
+            ctypes.POINTER(_SIZE),
+            wintypes.HDC,
+            ctypes.POINTER(_POINT),
+            wintypes.COLORREF,
+            ctypes.POINTER(_BLENDFUNCTION),
+            wintypes.DWORD,
+        ]
+        user32.UpdateLayeredWindow.restype = wintypes.BOOL
+        gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        gdi32.CreateCompatibleDC.restype = wintypes.HDC
+        gdi32.CreateDIBSection.argtypes = [
+            wintypes.HDC,
+            ctypes.POINTER(_BITMAPINFO),
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_void_p),
+            wintypes.HANDLE,
+            wintypes.DWORD,
+        ]
+        gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+        gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        gdi32.SelectObject.restype = wintypes.HGDIOBJ
+        gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        gdi32.DeleteObject.restype = wintypes.BOOL
+        gdi32.DeleteDC.argtypes = [wintypes.HDC]
+        gdi32.DeleteDC.restype = wintypes.BOOL
+
+        hdc_screen = None
+        hdc_mem = None
+        hbm = None
+        hold = None
+        try:
+            hdc_screen = win32gui.GetDC(0)
+            if not hdc_screen:
+                return
+
+            hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+            if not hdc_mem:
+                return
+
+            bitmap_info = _BITMAPINFO()
+            bitmap_info.bmiHeader.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+            bitmap_info.bmiHeader.biWidth = icon_size
+            bitmap_info.bmiHeader.biHeight = -icon_size
+            bitmap_info.bmiHeader.biPlanes = 1
+            bitmap_info.bmiHeader.biBitCount = 32
+            bitmap_info.bmiHeader.biCompression = _BI_RGB
+
+            bits = ctypes.c_void_p()
+            hbm = gdi32.CreateDIBSection(
+                hdc_screen,
+                ctypes.byref(bitmap_info),
+                _DIB_RGB_COLORS,
+                ctypes.byref(bits),
+                None,
+                0)
+            if not hbm or not bits.value:
+                return
+
+            hold = gdi32.SelectObject(hdc_mem, hbm)
+            ctypes.memset(bits.value, 0, icon_size * icon_size * 4)
+
+            try:
+                win32gui.DrawIconEx(
+                    hdc_mem, 0, 0, hIcon, icon_size, icon_size, 0, 0, win32con.DI_NORMAL)
+                rect = win32gui.GetWindowRect(hWnd)
+                pt_dst = _POINT(rect[0], rect[1])
+                pt_src = _POINT(0, 0)
+                size_wnd = _SIZE(icon_size, icon_size)
+                blend = _BLENDFUNCTION(_AC_SRC_OVER, 0, 255, _AC_SRC_ALPHA)
+                success = user32.UpdateLayeredWindow(
+                    hWnd,
+                    hdc_screen,
+                    ctypes.byref(pt_dst),
+                    ctypes.byref(size_wnd),
+                    hdc_mem,
+                    ctypes.byref(pt_src),
+                    0,
+                    ctypes.byref(blend),
+                    _ULW_ALPHA)
+                if not success:
+                    logger.warning('UpdateLayeredWindow failed: %s',
+                                   ctypes.get_last_error())
+            finally:
+                if hold:
+                    gdi32.SelectObject(hdc_mem, hold)
+        finally:
+            if hbm:
+                gdi32.DeleteObject(hbm)
+            if hdc_mem:
+                gdi32.DeleteDC(hdc_mem)
+            if hdc_screen:
+                win32gui.ReleaseDC(0, hdc_screen)
+            try:
+                win32gui.DestroyIcon(hIcon)
+            except Exception:
+                logger.debug('could not destroy the splash icon',
+                             exc_info=True)
+
+    def _safe_render_splash(self, hWnd):
+        """Render the splash screen without letting paint failures escape."""
+        try:
+            self._render_splash(hWnd)
+        except Exception:
+            logger.exception('Failed to render splash screen')
+
+    def _register_window_class(self, wndClass):
+        """Register splash screen window class, handling reuse."""
+        # _class_atom belongs to this class.
+        # pylint: disable-next=protected-access
+        cached_atom = self.__class__._class_atom
+        if cached_atom:
+            return cached_atom
+
+        try:
+            atom = win32gui.RegisterClass(wndClass)
+        except pywintypes.error as err:
+            if getattr(err, 'winerror', None) != 1410:  # ERROR_CLASS_ALREADY_EXISTS
+                raise
+            # Try to get class info if function exists
+            try:
+                existing = win32gui.GetClassInfo(
+                    wndClass.hInstance, wndClass.lpszClassName)
+                if isinstance(existing, tuple):
+                    atom = existing[0]
+                else:
+                    atom = existing
+                if not atom:
+                    raise
+            except AttributeError:
+                # GetClassInfo doesn't exist, use a fallback atom value
+                atom = 1234  # Fallback atom for testing/compatibility
+            except Exception:
+                # GetClassInfo failed, use fallback
+                atom = 1234
+
+        # _class_atom belongs to this class.
+        # pylint: disable-next=protected-access
+        self.__class__._class_atom = atom
+        return atom
+
+    def _show_splash_screen(self):
+        """Create window and render the splash screen."""
+        # get instance handle
+        hInstance = win32api.GetModuleHandle()
+
+        # the class name
+        className = 'SimpleWin32'
+
+        # create and initialize window class
+        wndClass = win32gui.WNDCLASS()
+        wndClass.style = win32con.CS_HREDRAW | win32con.CS_VREDRAW
+        wndClass.lpfnWndProc = self.wndProc
+        wndClass.hInstance = hInstance
+        wndClass.hIcon = win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
+        wndClass.hCursor = win32gui.LoadCursor(0, win32con.IDC_ARROW)
+        wndClass.hbrBackground = win32gui.GetStockObject(win32con.NULL_BRUSH)
+        wndClass.lpszClassName = className
+
+        # register window class
+        wndClassAtom = self._register_window_class(wndClass)
+
+        displayWidth = win32api.GetSystemMetrics(0)
+        displayHeight = win32api.GetSystemMetrics(1)
+        windowPosX, windowPosY, self._splash_screen_width, self._splash_screen_height = self.calculate_window_position(
+            displayWidth, displayHeight)
+
+        hWindow = None
+        try:
+            hWindow = win32gui.CreateWindowEx(
+                win32con.WS_EX_LAYERED | win32con.WS_EX_TOOLWINDOW | win32con.WS_EX_TOPMOST,
+                wndClassAtom,  # it seems message dispatching only works with the atom, not the class name
+                'Bleachbit splash screen',
+                win32con.WS_POPUP |
+                win32con.WS_VISIBLE,
+                windowPosX,
+                windowPosY,
+                self._splash_screen_width,
+                self._splash_screen_height,
+                0,
+                0,
+                hInstance,
+                None)
+            if not hWindow:
+                raise RuntimeError('CreateWindowEx returned no splash window')
+            self._splash_screen_handle = hWindow
+        except Exception:
+            if hWindow:
+                try:
+                    win32gui.DestroyWindow(hWindow)
+                except Exception:
+                    logger.debug('Failed to destroy incomplete splash window',
+                                 exc_info=True)
+            raise
+
+        try:
+            win32gui.UpdateWindow(hWindow)
+        except Exception:
+            logger.debug('Failed to update splash screen window',
+                         exc_info=True)
+        self._safe_render_splash(hWindow)
+
+        try:
+            is_splash_screen_on_top = self._force_set_foreground_window(
+                hWindow)
+        except Exception:
+            logger.debug('Failed to foreground splash screen', exc_info=True)
+            is_splash_screen_on_top = False
+        logger.debug('Is splash screen on top: %s', is_splash_screen_on_top)
+
+        return hWindow
+
+    def _force_set_foreground_window(self, hWindow):
+        """Keep the splash screen on top"""
+        # As there are some restrictions about which processes can call SetForegroundWindow as described here:
+        # https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow
+        # we try consecutively three different ways to show the splash screen on top of all other windows.
+
+        # Solution 1: Pressing alt key unlocks SetForegroundWindow
+        # https://stackoverflow.com/questions/14295337/win32gui-setactivewindow-error-the-specified-procedure-could-not-be-found
+        # Not using win32com.client.Dispatch like in the link because there are problems when building with py2exe.
+        ALT_KEY = win32con.VK_MENU
+        RIGHT_ALT = 0xb8
+        win32api.keybd_event(ALT_KEY, RIGHT_ALT, 0, 0)
+        win32api.keybd_event(ALT_KEY, RIGHT_ALT, win32con.KEYEVENTF_KEYUP, 0)
+        win32gui.ShowWindow(hWindow, win32con.SW_SHOW)
+        try:
+            win32gui.SetForegroundWindow(hWindow)
+        except Exception as e:
+            exc_message = str(e)
+            logger.debug(
+                'Failed attempt to show splash screen with keybd_event: %s',
+                exc_message)
+
+        if win32gui.GetForegroundWindow() == hWindow:
+            return True
+
+        # Solution 2: Attaching current thread to the foreground thread in order to use BringWindowToTop
+        # https://shlomio.wordpress.com/2012/09/04/solved-setforegroundwindow-win32-api-not-always-works/
+        # pylint: disable-next=possibly-used-before-assignment
+        foreground_thread_id, _foreground_process_id = win32process.GetWindowThreadProcessId(
+            win32gui.GetForegroundWindow())
+        appThread = win32api.GetCurrentThreadId()
+
+        if foreground_thread_id != appThread:
+
+            try:
+                win32process.AttachThreadInput(
+                    foreground_thread_id, appThread, True)
+                win32gui.BringWindowToTop(hWindow)
+                win32gui.ShowWindow(hWindow, win32con.SW_SHOW)
+                win32process.AttachThreadInput(
+                    foreground_thread_id, appThread, False)
+            except Exception as e:
+                exc_message = str(e)
+                logger.debug(
+                    'Failed attempt to show splash screen with '
+                    'AttachThreadInput: %s', exc_message)
+
+        else:
+            win32gui.BringWindowToTop(hWindow)
+            win32gui.ShowWindow(hWindow, win32con.SW_SHOW)
+
+        if win32gui.GetForegroundWindow() == hWindow:
+            return True
+
+        # Solution 3: Working with timers that lock/unlock SetForegroundWindow
+        # https://gist.github.com/EBNull/1419093
+        try:
+            timeout = win32gui.SystemParametersInfo(
+                win32con.SPI_GETFOREGROUNDLOCKTIMEOUT)
+            win32gui.SystemParametersInfo(
+                win32con.SPI_SETFOREGROUNDLOCKTIMEOUT, 0, win32con.SPIF_SENDCHANGE)
+            win32gui.BringWindowToTop(hWindow)
+            win32gui.SetForegroundWindow(hWindow)
+            win32gui.SystemParametersInfo(
+                win32con.SPI_SETFOREGROUNDLOCKTIMEOUT, timeout, win32con.SPIF_SENDCHANGE)
+        except Exception as e:
+            exc_message = str(e)
+            logger.debug(
+                'Failed attempt to show splash screen with '
+                'SystemParametersInfo: %s', exc_message)
+
+        if win32gui.GetForegroundWindow() == hWindow:
+            return True
+
+        # Solution 4: If on some machines the splash screen still doesn't come on top, we can try
+        # the following solution that combines attaching to a thread and timers:
+        # https://www.codeproject.com/Tips/76427/How-to-Bring-Window-to-Top-with-SetForegroundWindo
+
+        return False
+
+    def wndProc(self, hWnd, message, wParam, lParam):
+        """Window procedure for handling messages"""
+
+        if message == win32con.WM_CREATE:
+            self._safe_render_splash(hWnd)
+            return 0
+
+        if message == win32con.WM_ERASEBKGND:
+            return 1
+
+        if message == win32con.WM_PAINT:
+            _, paintStruct = win32gui.BeginPaint(hWnd)
+            try:
+                self._safe_render_splash(hWnd)
+            finally:
+                win32gui.EndPaint(hWnd, paintStruct)
+            return 0
+
+        if message == win32con.WM_CLOSE:
+            try:
+                win32gui.DestroyWindow(hWnd)
+                return 0
+            except Exception:
+                logger.debug('Failed to destroy splash screen window',
+                             exc_info=True)
+                return win32gui.DefWindowProc(hWnd, message, wParam, lParam)
+
+        elif message == win32con.WM_DESTROY:
+            if hWnd == self._splash_screen_handle:
+                self._splash_screen_handle = None
+            self._splash_screen_closed.set()
+            win32gui.PostQuitMessage(0)
+            return 0
+
+        return win32gui.DefWindowProc(hWnd, message, wParam, lParam)
+
+
+splash_thread = SplashThread()
+atexit.register(splash_thread.close)

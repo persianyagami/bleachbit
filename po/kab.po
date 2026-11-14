@@ -1,0 +1,3542 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: bleachbit\n"
+"Report-Msgid-Bugs-To: andrew@bleachbit.org\n"
+"POT-Creation-Date: 2026-10-30 14:03-0600\n"
+"PO-Revision-Date: 2026-11-08 18:51+0000\n"
+"Last-Translator: ButterflyOfFire <boffire@users.noreply.hosted.weblate.org>\n"
+"Language-Team: Kabyle <https://hosted.weblate.org/projects/bleachbit/main/"
+"kab/>\n"
+"Language: kab\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=n > 1;\n"
+"X-Generator: Weblate 2026.11.2.dev0\n"
+
+#. Cleaner description: the category of application.
+#: ../cleaners/realplayer.xml ../cleaners/windows_media_player.xml
+#: ../cleaners/audacious.xml ../cleaners/exaile.xml ../cleaners/winamp.xml
+#: ../cleaners/vlc.xml
+msgid "Media player"
+msgstr "Imeɣri n umidya"
+
+#. TRANSLATORS: Sidebar label for the page managing browser cookies in
+#. the Preferences dialog.
+#: ../cleaners/realplayer.xml ../cleaners/librewolf.xml ../cleaners/vivaldi.xml
+#: ../cleaners/helium.xml ../cleaners/safari.xml ../cleaners/safari_windows.xml
+#: ../cleaners/waterfox.xml ../cleaners/epiphany.xml ../cleaners/zen.xml
+#: ../cleaners/konqueror.xml ../cleaners/silverlight.xml
+#: ../cleaners/chromium.xml ../cleaners/slack.xml ../cleaners/thunderbird.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml ../cleaners/liferea.xml
+#: ../cleaners/brave.xml ../cleaners/seamonkey.xml ../cleaners/flash.xml
+#: ../cleaners/google_chrome.xml ../cleaners/teamviewer.xml
+#: ../cleaners/internet_explorer.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml ../cleaners/discord.xml ../bleachbit/GuiPreferences.py
+msgid "Cookies"
+msgstr "Inagan n tuqqna"
+
+#. Description of the Cookies cleaning option.
+#: ../cleaners/realplayer.xml ../cleaners/librewolf.xml ../cleaners/vivaldi.xml
+#: ../cleaners/helium.xml ../cleaners/safari.xml ../cleaners/safari_windows.xml
+#: ../cleaners/waterfox.xml ../cleaners/epiphany.xml ../cleaners/zen.xml
+#: ../cleaners/konqueror.xml ../cleaners/silverlight.xml
+#: ../cleaners/chromium.xml ../cleaners/slack.xml ../cleaners/thunderbird.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml ../cleaners/liferea.xml
+#: ../cleaners/brave.xml ../cleaners/seamonkey.xml ../cleaners/flash.xml
+#: ../cleaners/google_chrome.xml ../cleaners/teamviewer.xml
+#: ../cleaners/internet_explorer.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml ../cleaners/discord.xml
+msgid ""
+"Delete cookies, which store login information, website preferences, and "
+"tracking identifiers"
+msgstr ""
+"Kkes inagan n tuqqna, igebren talɣut n tuqqna, ismenyifen n usmel web akked "
+"isulay n uḍfar"
+
+#. Name of a cleaning option for usage history.
+#: ../cleaners/realplayer.xml ../cleaners/zsh.xml ../cleaners/bash.xml
+#: ../cleaners/elinks.xml ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/easytag.xml ../cleaners/safari.xml
+#: ../cleaners/safari_windows.xml ../cleaners/fish.xml ../cleaners/chromium.xml
+#: ../cleaners/sqlite3.xml ../cleaners/windows_defender.xml
+#: ../cleaners/slack.xml ../cleaners/brave.xml ../cleaners/nautilus.xml
+#: ../cleaners/links2.xml ../cleaners/d4x.xml ../cleaners/libreoffice.xml
+#: ../cleaners/seamonkey.xml ../cleaners/google_chrome.xml ../cleaners/mc.xml
+#: ../cleaners/tortoisesvn.xml ../cleaners/internet_explorer.xml
+#: ../cleaners/winrar.xml ../cleaners/microsoft_edge.xml ../cleaners/python.xml
+#: ../cleaners/vim.xml ../cleaners/opera.xml ../cleaners/discord.xml
+#: ../cleaners/octave.xml
+msgid "History"
+msgstr "Azray"
+
+#. Description of the History cleaning option.
+#: ../cleaners/realplayer.xml ../cleaners/easytag.xml ../cleaners/filezilla.xml
+#: ../cleaners/gnome.xml ../cleaners/windows_defender.xml
+#: ../cleaners/nautilus.xml ../cleaners/links2.xml ../cleaners/d4x.xml
+#: ../cleaners/libreoffice.xml ../cleaners/mc.xml ../cleaners/tortoisesvn.xml
+#: ../cleaners/internet_explorer.xml ../cleaners/winrar.xml
+#: ../cleaners/amule.xml
+msgid "Delete the usage history"
+msgstr "Kkes azray n useqdec"
+
+#. TRANSLATORS: Name of a cleaning option for Windows log files.
+#: ../cleaners/realplayer.xml ../cleaners/miro.xml ../cleaners/audacious.xml
+#: ../cleaners/yahoo_messenger.xml ../cleaners/easytag.xml
+#: ../cleaners/warzone2100.xml ../cleaners/gpodder.xml ../cleaners/exaile.xml
+#: ../cleaners/windows_defender.xml ../cleaners/smartftp.xml
+#: ../cleaners/docker.xml ../cleaners/android_studio.xml ../cleaners/vscode.xml
+#: ../cleaners/hippo_opensim_viewer.xml ../cleaners/adobe_reader.xml
+#: ../cleaners/claude.xml ../cleaners/zoom.xml ../cleaners/profanity.xml
+#: ../cleaners/teamviewer.xml ../cleaners/internet_explorer.xml
+#: ../cleaners/screenlets.xml ../cleaners/gftp.xml ../cleaners/amule.xml
+#: ../cleaners/vuze.xml ../bleachbit/Cleaner.py
+msgid "Logs"
+msgstr "Iɣmisen"
+
+#. TRANSLATORS: Description of the Logs cleaning option.
+#: ../cleaners/realplayer.xml ../cleaners/miro.xml ../cleaners/audacious.xml
+#: ../cleaners/yahoo_messenger.xml ../cleaners/warzone2100.xml
+#: ../cleaners/gpodder.xml ../cleaners/exaile.xml
+#: ../cleaners/windows_defender.xml ../cleaners/smartftp.xml
+#: ../cleaners/docker.xml ../cleaners/android_studio.xml ../cleaners/vscode.xml
+#: ../cleaners/hippo_opensim_viewer.xml ../cleaners/adobe_reader.xml
+#: ../cleaners/claude.xml ../cleaners/zoom.xml ../cleaners/profanity.xml
+#: ../cleaners/teamviewer.xml ../cleaners/internet_explorer.xml
+#: ../cleaners/screenlets.xml ../cleaners/gftp.xml ../cleaners/amule.xml
+#: ../cleaners/vuze.xml ../bleachbit/Cleaner.py
+msgid "Delete the logs"
+msgstr "Kkes iɣmisen"
+
+#: ../cleaners/xine.xml ../cleaners/miro.xml ../cleaners/silverlight.xml
+#: ../cleaners/flash.xml
+msgid "Multimedia viewer"
+msgstr "Ameskan n ugetmedia"
+
+#. TRANSLATORS: Name of a cleaning option. Cache is a noun.
+#: ../cleaners/xine.xml ../cleaners/miro.xml ../cleaners/amsn.xml
+#: ../cleaners/librewolf.xml ../cleaners/openoffice.xml
+#: ../cleaners/rhythmbox.xml ../cleaners/beagle.xml
+#: ../cleaners/windows_media_player.xml ../cleaners/audacious.xml
+#: ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/yahoo_messenger.xml ../cleaners/pidgin.xml
+#: ../cleaners/secondlife_viewer.xml ../cleaners/safari.xml
+#: ../cleaners/safari_windows.xml ../cleaners/waterfox.xml
+#: ../cleaners/emesene.xml ../cleaners/nexuiz.xml ../cleaners/java.xml
+#: ../cleaners/epiphany.xml ../cleaners/gpodder.xml ../cleaners/geary.xml
+#: ../cleaners/zen.xml ../cleaners/thumbnails.xml ../cleaners/exaile.xml
+#: ../cleaners/chromium.xml ../cleaners/slack.xml ../cleaners/smartftp.xml
+#: ../cleaners/thunderbird.xml ../cleaners/docker.xml ../cleaners/palemoon.xml
+#: ../cleaners/firefox.xml ../cleaners/liferea.xml ../cleaners/vscode.xml
+#: ../cleaners/gimp.xml ../cleaners/hippo_opensim_viewer.xml
+#: ../cleaners/adobe_reader.xml ../cleaners/brave.xml ../cleaners/claude.xml
+#: ../cleaners/zoom.xml ../cleaners/evolution.xml ../cleaners/seamonkey.xml
+#: ../cleaners/flash.xml ../cleaners/google_chrome.xml
+#: ../cleaners/tremulous.xml ../cleaners/teamviewer.xml
+#: ../cleaners/internet_explorer.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/gftp.xml ../cleaners/kde.xml ../cleaners/vuze.xml
+#: ../cleaners/opera.xml ../cleaners/discord.xml ../bleachbit/Cleaner.py
+msgid "Cache"
+msgstr "Tazarkatut"
+
+#. TRANSLATORS: The description of what certain cleaning options do.
+#: ../cleaners/xine.xml ../cleaners/dnf.xml ../cleaners/miro.xml
+#: ../cleaners/amsn.xml ../cleaners/librewolf.xml ../cleaners/openoffice.xml
+#: ../cleaners/rhythmbox.xml ../cleaners/beagle.xml ../cleaners/yum.xml
+#: ../cleaners/windows_media_player.xml ../cleaners/audacious.xml
+#: ../cleaners/yahoo_messenger.xml ../cleaners/pidgin.xml
+#: ../cleaners/secondlife_viewer.xml ../cleaners/pacman.xml
+#: ../cleaners/waterfox.xml ../cleaners/nexuiz.xml ../cleaners/java.xml
+#: ../cleaners/gpodder.xml ../cleaners/geary.xml ../cleaners/zen.xml
+#: ../cleaners/thumbnails.xml ../cleaners/exaile.xml
+#: ../cleaners/windows_explorer.xml ../cleaners/smartftp.xml
+#: ../cleaners/apt.xml ../cleaners/docker.xml ../cleaners/palemoon.xml
+#: ../cleaners/android_studio.xml ../cleaners/firefox.xml
+#: ../cleaners/liferea.xml ../cleaners/vscode.xml ../cleaners/gimp.xml
+#: ../cleaners/hippo_opensim_viewer.xml ../cleaners/adobe_reader.xml
+#: ../cleaners/claude.xml ../cleaners/zoom.xml ../cleaners/evolution.xml
+#: ../cleaners/flash.xml ../cleaners/teamviewer.xml
+#: ../cleaners/internet_explorer.xml ../cleaners/gftp.xml ../cleaners/kde.xml
+#: ../cleaners/vuze.xml ../bleachbit/Cleaner.py
+msgid "Delete the cache"
+msgstr "Sfeḍ tazarkatut"
+
+#. Name of a cleaning option: the list of most recently used items, often the last opened files.
+#: ../cleaners/paint.xml ../cleaners/openoffice.xml
+#: ../cleaners/microsoft_office.xml ../cleaners/windows_media_player.xml
+#: ../cleaners/wordpad.xml ../cleaners/audacious.xml ../cleaners/filezilla.xml
+#: ../cleaners/windows_explorer.xml ../cleaners/smartftp.xml
+#: ../cleaners/winamp.xml ../cleaners/adobe_reader.xml ../cleaners/winzip.xml
+#: ../cleaners/teamviewer.xml ../cleaners/vlc.xml
+msgid "Most recently used"
+msgstr "Ifuyla yettwasqedcen melmi kan"
+
+#. Description of the Most recently used cleaning option.
+#: ../cleaners/paint.xml ../cleaners/microsoft_office.xml
+#: ../cleaners/windows_media_player.xml ../cleaners/wordpad.xml
+#: ../cleaners/windows_explorer.xml ../cleaners/smartftp.xml
+#: ../cleaners/winamp.xml ../cleaners/winzip.xml ../cleaners/teamviewer.xml
+#: ../cleaners/vlc.xml
+msgid "Delete the most recently used list"
+msgstr "Sfeḍ tabdart n yisemliyen yettwasqedcen ugar melmi kan"
+
+#: ../cleaners/dnf.xml ../cleaners/yum.xml ../cleaners/pacman.xml
+#: ../cleaners/apt.xml ../cleaners/snap.xml
+msgid "Package manager"
+msgstr "Asefrak n yikemmas"
+
+#: ../cleaners/dnf.xml
+msgid "Remove packages that were formerly dependencies"
+msgstr ""
+
+#: ../cleaners/dnf.xml
+msgid ""
+"Carefully review the list of packages that will be removed by running \"dnf "
+"list autoremove\"."
+msgstr ""
+"Sekyed akken iwata tabdart n yikemmas ara yettwakksen s uselkem n « dnf list "
+"autoremove »."
+
+#: ../cleaners/amsn.xml ../cleaners/yahoo_messenger.xml ../cleaners/pidgin.xml
+#: ../cleaners/emesene.xml ../cleaners/slack.xml ../cleaners/hexchat.xml
+#: ../cleaners/zoom.xml ../cleaners/skype.xml ../cleaners/profanity.xml
+#: ../cleaners/discord.xml
+msgid "Chat client"
+msgstr "Amsaɣ n udiwenni usrid"
+
+#: ../cleaners/amsn.xml ../cleaners/yahoo_messenger.xml ../cleaners/pidgin.xml
+#: ../cleaners/emesene.xml ../cleaners/hexchat.xml ../cleaners/skype.xml
+#: ../cleaners/seamonkey.xml
+msgid "Chat logs"
+msgstr "Iɣmisen n idiwenniyen"
+
+#: ../cleaners/amsn.xml ../cleaners/yahoo_messenger.xml ../cleaners/pidgin.xml
+#: ../cleaners/emesene.xml ../cleaners/hexchat.xml ../cleaners/skype.xml
+#: ../cleaners/seamonkey.xml
+msgid "Delete the chat logs"
+msgstr "Sfeḍ iɣmisen n idiwenniyen"
+
+#. Cleaner description: the category of application.
+#: ../cleaners/librewolf.xml ../cleaners/elinks.xml ../cleaners/vivaldi.xml
+#: ../cleaners/helium.xml ../cleaners/safari.xml ../cleaners/safari_windows.xml
+#: ../cleaners/waterfox.xml ../cleaners/epiphany.xml ../cleaners/zen.xml
+#: ../cleaners/konqueror.xml ../cleaners/chromium.xml ../cleaners/palemoon.xml
+#: ../cleaners/firefox.xml ../cleaners/brave.xml ../cleaners/links2.xml
+#: ../cleaners/seamonkey.xml ../cleaners/google_chrome.xml
+#: ../cleaners/internet_explorer.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "Web browser"
+msgstr "Iminig Web"
+
+#: ../cleaners/librewolf.xml ../cleaners/waterfox.xml ../cleaners/zen.xml
+#: ../cleaners/windows_defender.xml ../cleaners/palemoon.xml
+#: ../cleaners/firefox.xml ../cleaners/vscode.xml ../cleaners/claude.xml
+#: ../cleaners/deepscan.xml ../cleaners/amule.xml ../cleaners/vuze.xml
+msgid "Backup files"
+msgstr "Ifuyla n weḥraz"
+
+#: ../cleaners/librewolf.xml ../cleaners/waterfox.xml ../cleaners/zen.xml
+#: ../cleaners/windows_defender.xml ../cleaners/palemoon.xml
+#: ../cleaners/firefox.xml ../cleaners/vscode.xml ../cleaners/claude.xml
+#: ../cleaners/deepscan.xml ../cleaners/amule.xml ../cleaners/vuze.xml
+msgid "Delete the backup files"
+msgstr "Kkes ifuyla n weḥraz"
+
+#: ../cleaners/librewolf.xml ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/safari.xml ../cleaners/waterfox.xml ../cleaners/zen.xml
+#: ../cleaners/chromium.xml ../cleaners/thunderbird.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml ../cleaners/vscode.xml
+#: ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/microsoft_edge.xml ../cleaners/opera.xml
+msgid "Crash reports"
+msgstr "Ineqqisen n uɣelluy"
+
+#. Description of a cleaning option that deletes files on disk.
+#: ../cleaners/librewolf.xml ../cleaners/zsh.xml ../cleaners/beagle.xml
+#: ../cleaners/vivaldi.xml ../cleaners/helium.xml ../cleaners/safari.xml
+#: ../cleaners/waterfox.xml ../cleaners/geary.xml ../cleaners/zen.xml
+#: ../cleaners/chromium.xml ../cleaners/windows_defender.xml
+#: ../cleaners/thunderbird.xml ../cleaners/palemoon.xml ../cleaners/firefox.xml
+#: ../cleaners/vscode.xml ../cleaners/brave.xml ../cleaners/claude.xml
+#: ../cleaners/deepscan.xml ../cleaners/google_chrome.xml
+#: ../cleaners/transmission.xml ../cleaners/profanity.xml
+#: ../cleaners/microsoft_edge.xml ../cleaners/vuze.xml ../cleaners/opera.xml
+msgid "Delete the files"
+msgstr "Kkes ifuyla"
+
+#: ../cleaners/librewolf.xml ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/safari.xml ../cleaners/waterfox.xml ../cleaners/zen.xml
+#: ../cleaners/chromium.xml ../cleaners/palemoon.xml ../cleaners/firefox.xml
+#: ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/internet_explorer.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "Form history"
+msgstr "Azray n tferka"
+
+#: ../cleaners/librewolf.xml ../cleaners/waterfox.xml ../cleaners/zen.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml
+#: ../cleaners/internet_explorer.xml
+msgid "Saved form entries and search bar history"
+msgstr "Isefka n tferka yettwaḥerzen d uzray n tfeggagt n unadi"
+
+#: ../cleaners/librewolf.xml ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/waterfox.xml ../cleaners/epiphany.xml ../cleaners/zen.xml
+#: ../cleaners/chromium.xml ../cleaners/thunderbird.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml ../cleaners/brave.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "Passwords"
+msgstr "Awalen uffiren"
+
+#: ../cleaners/librewolf.xml ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/waterfox.xml ../cleaners/epiphany.xml ../cleaners/zen.xml
+#: ../cleaners/chromium.xml ../cleaners/thunderbird.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml ../cleaners/brave.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid ""
+"A database of usernames and passwords as well as a list of sites that should "
+"not store passwords"
+msgstr ""
+"Taffa n yisefka n yismawen n yiseqdacen d wawalen uffiren, akked tebdart n "
+"yismal ideg ur ilaq ara ad ttwaseklsen wawalen uffiren"
+
+#. Warning shown when the user selects the Passwords cleaning option.
+#: ../cleaners/librewolf.xml ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/waterfox.xml ../cleaners/epiphany.xml ../cleaners/zen.xml
+#: ../cleaners/chromium.xml ../cleaners/thunderbird.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml ../cleaners/brave.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "This option will delete your saved passwords."
+msgstr "Aɣewwaṛ-agi ad yekkes awalen uffiren yettwaskelsen."
+
+#. Label for cleaning option that deletes saved session data.
+#: ../cleaners/librewolf.xml ../cleaners/zsh.xml ../cleaners/vivaldi.xml
+#: ../cleaners/helium.xml ../cleaners/safari.xml ../cleaners/waterfox.xml
+#: ../cleaners/zen.xml ../cleaners/chromium.xml ../cleaners/palemoon.xml
+#: ../cleaners/firefox.xml ../cleaners/brave.xml ../cleaners/claude.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "Session"
+msgstr "Tiɣimit"
+
+#. Description for the Session cleaning option.
+#: ../cleaners/librewolf.xml ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/safari.xml ../cleaners/waterfox.xml ../cleaners/zen.xml
+#: ../cleaners/chromium.xml ../cleaners/palemoon.xml ../cleaners/firefox.xml
+#: ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/microsoft_edge.xml ../cleaners/opera.xml
+msgid "Previously open tabs and windows"
+msgstr "Iccaren akked isfuyla i yeldin yakan"
+
+#. Label for cleaning option to delete site data such as LocalStorage and IndexedDB.
+#: ../cleaners/librewolf.xml ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/safari.xml ../cleaners/waterfox.xml ../cleaners/epiphany.xml
+#: ../cleaners/zen.xml ../cleaners/chromium.xml ../cleaners/palemoon.xml
+#: ../cleaners/firefox.xml ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/teamviewer.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "Site data"
+msgstr "Isefka n usmel"
+
+#. Description for cleaning option. LocalStorage and IndexedDB are proper nouns: do not translate.
+#: ../cleaners/librewolf.xml ../cleaners/vivaldi.xml ../cleaners/helium.xml
+#: ../cleaners/safari.xml ../cleaners/waterfox.xml ../cleaners/epiphany.xml
+#: ../cleaners/zen.xml ../cleaners/chromium.xml ../cleaners/palemoon.xml
+#: ../cleaners/firefox.xml ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/teamviewer.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "Delete LocalStorage, IndexedDB, and other data stored by websites"
+msgstr "Kkes LocalStorage, IndexedDB d yisefka nniḍen i ḥerzen yismal Web"
+
+#: ../cleaners/librewolf.xml ../cleaners/helium.xml ../cleaners/safari.xml
+#: ../cleaners/waterfox.xml ../cleaners/zen.xml ../cleaners/chromium.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml ../cleaners/brave.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "Site preferences"
+msgstr "Ismenyifen n usmel"
+
+#: ../cleaners/librewolf.xml ../cleaners/helium.xml ../cleaners/safari.xml
+#: ../cleaners/waterfox.xml ../cleaners/zen.xml ../cleaners/chromium.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml ../cleaners/brave.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "Settings for individual sites"
+msgstr "Iɣewwaṛen n yal asmel Web yettwarzan"
+
+#: ../cleaners/librewolf.xml ../cleaners/waterfox.xml ../cleaners/zen.xml
+#: ../cleaners/konqueror.xml ../cleaners/palemoon.xml ../cleaners/firefox.xml
+msgid "URL history"
+msgstr "Azray n tansiwin URL"
+
+#: ../cleaners/librewolf.xml ../cleaners/safari_windows.xml
+#: ../cleaners/waterfox.xml ../cleaners/zen.xml ../cleaners/konqueror.xml
+#: ../cleaners/palemoon.xml ../cleaners/firefox.xml
+#: ../cleaners/internet_explorer.xml
+msgid "List of visited web pages"
+msgstr "Tabdart n isebtar web yettwarzan"
+
+#. TRANSLATORS: Vacuum is a verb.  The term is jargon
+#. from the SQLite database.  Microsoft Access uses
+#. the term 'Compact Database' (which you may translate
+#. instead).  Another synonym is 'defragment.'
+#: ../cleaners/librewolf.xml ../cleaners/yum.xml ../cleaners/vivaldi.xml
+#: ../cleaners/helium.xml ../cleaners/safari.xml ../cleaners/safari_windows.xml
+#: ../cleaners/waterfox.xml ../cleaners/gpodder.xml ../cleaners/geary.xml
+#: ../cleaners/zen.xml ../cleaners/chromium.xml ../cleaners/slack.xml
+#: ../cleaners/thunderbird.xml ../cleaners/palemoon.xml ../cleaners/firefox.xml
+#: ../cleaners/liferea.xml ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/microsoft_edge.xml ../cleaners/opera.xml ../cleaners/discord.xml
+#: ../bleachbit/Action.py
+msgid "Vacuum"
+msgstr "Skussem taffiwin n yisefka"
+
+#: ../cleaners/librewolf.xml ../cleaners/yum.xml ../cleaners/vivaldi.xml
+#: ../cleaners/helium.xml ../cleaners/safari.xml ../cleaners/safari_windows.xml
+#: ../cleaners/waterfox.xml ../cleaners/gpodder.xml ../cleaners/geary.xml
+#: ../cleaners/zen.xml ../cleaners/chromium.xml ../cleaners/slack.xml
+#: ../cleaners/thunderbird.xml ../cleaners/palemoon.xml ../cleaners/firefox.xml
+#: ../cleaners/liferea.xml ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/microsoft_edge.xml ../cleaners/opera.xml ../cleaners/discord.xml
+msgid ""
+"Clean database fragmentation to reduce space and improve speed without "
+"removing any data"
+msgstr ""
+"Kkes aseftutes n taffa n yisefka akken ad tesneɣseḍ tallunt yettwasqedcen, "
+"ad tesnerniḍ arured n yinig, war ma tekkseḍ ula d yiwen usefku"
+
+#: ../cleaners/zsh.xml ../cleaners/bash.xml ../cleaners/fish.xml
+msgid "Shell"
+msgstr "Shell"
+
+#: ../cleaners/zsh.xml ../cleaners/bash.xml ../cleaners/fish.xml
+#: ../cleaners/sqlite3.xml ../cleaners/python.xml ../cleaners/octave.xml
+msgid "Delete the command history"
+msgstr "Kkes azray n tladna"
+
+#: ../cleaners/openoffice.xml ../cleaners/microsoft_office.xml
+#: ../cleaners/libreoffice.xml
+msgid "Office suite"
+msgstr "Tagrumma tawurmahilt"
+
+#. TRANSLATORS: Description of the Recent documents list cleaning option.
+#: ../cleaners/openoffice.xml ../cleaners/audacious.xml
+#: ../cleaners/windows_explorer.xml ../cleaners/gwenview.xml
+#: ../cleaners/adobe_reader.xml ../cleaners/gedit.xml ../cleaners/kde.xml
+#: ../bleachbit/Cleaner.py
+msgid "Delete the list of recently used documents"
+msgstr "Sfeḍ tabdart n yisemliyen yettwasqedcen melmi kan"
+
+#: ../cleaners/rhythmbox.xml
+msgid "Database"
+msgstr "Taffa n yisefka"
+
+#: ../cleaners/rhythmbox.xml
+msgid ""
+"Delete the database, which contains information such as play count and last "
+"played"
+msgstr ""
+
+#. Warning shown when the user selects the Database cleaning option in Rhythmbox. 'Song ratings' are star ratings given to music tracks by the user.
+#: ../cleaners/rhythmbox.xml
+msgid ""
+"This option will delete song ratings, internet radio stations, and podcast "
+"subscriptions."
+msgstr ""
+
+#: ../cleaners/microsoft_office.xml ../cleaners/beagle.xml
+#: ../cleaners/secondlife_viewer.xml ../cleaners/x11.xml ../cleaners/gl-117.xml
+msgid "Debug logs"
+msgstr "Iɣmisen n useɣti"
+
+#: ../cleaners/microsoft_office.xml ../cleaners/beagle.xml
+#: ../cleaners/secondlife_viewer.xml ../cleaners/easytag.xml
+#: ../cleaners/x11.xml ../cleaners/gl-117.xml
+msgid "Delete the debug logs"
+msgstr "Sfeḍ iɣmisen n useɣti"
+
+#. TRANSLATORS: Name of a cleaning option for temporary files.
+#: ../cleaners/bash.xml ../cleaners/google_earth.xml ../cleaners/wine.xml
+#: ../cleaners/silverlight.xml ../cleaners/windows_defender.xml
+#: ../cleaners/winetricks.xml ../cleaners/gimp.xml ../cleaners/adobe_reader.xml
+#: ../cleaners/claude.xml ../cleaners/deepscan.xml ../cleaners/winrar.xml
+#: ../cleaners/amule.xml ../cleaners/kde.xml ../cleaners/vuze.xml
+#: ../bleachbit/Cleaner.py
+msgid "Temporary files"
+msgstr "Ifuyla iskudanen"
+
+#. TRANSLATORS: Description of the Temporary files cleaning option.
+#: ../cleaners/bash.xml ../cleaners/google_earth.xml ../cleaners/wine.xml
+#: ../cleaners/silverlight.xml ../cleaners/windows_defender.xml
+#: ../cleaners/winetricks.xml ../cleaners/gimp.xml ../cleaners/adobe_reader.xml
+#: ../cleaners/claude.xml ../cleaners/deepscan.xml ../cleaners/winrar.xml
+#: ../cleaners/amule.xml ../cleaners/kde.xml ../cleaners/vuze.xml
+#: ../bleachbit/Cleaner.py
+msgid "Delete the temporary files"
+msgstr "Kkes ifuyla iskudanen"
+
+#: ../cleaners/beagle.xml ../cleaners/recoll.xml
+msgid "Search tool"
+msgstr "Afecku n unadi"
+
+#: ../cleaners/beagle.xml ../cleaners/thunderbird.xml ../cleaners/recoll.xml
+msgid "Index"
+msgstr "Amatar"
+
+#: ../cleaners/elinks.xml
+msgid "Delete the cookies, visited URLs, and search history"
+msgstr "Sfeḍ inagan n tuqqna, tansiwin URL yettwarzan d uzray n unadi"
+
+#: ../cleaners/wordpad.xml
+msgid "Word processor"
+msgstr "Aseɣẓan n usefser n yiḍrisen"
+
+#: ../cleaners/vivaldi.xml ../cleaners/helium.xml ../cleaners/safari.xml
+#: ../cleaners/safari_windows.xml ../cleaners/epiphany.xml
+#: ../cleaners/chromium.xml ../cleaners/slack.xml ../cleaners/thunderbird.xml
+#: ../cleaners/brave.xml ../cleaners/seamonkey.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml
+msgid "Delete the web cache, which reduces time to display revisited pages"
+msgstr ""
+"Sfeḍ tazarkatut Web, dayen ara yesneqsen akud ilaqen i wuskan n yisebtar "
+"yettwarzan yakan"
+
+#: ../cleaners/vivaldi.xml ../cleaners/helium.xml ../cleaners/safari.xml
+#: ../cleaners/chromium.xml ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/microsoft_edge.xml ../cleaners/opera.xml
+msgid "A history of forms entered in websites"
+msgstr "Azray n yisefka yettwasekcmen deg tferka n yismal Web"
+
+#: ../cleaners/vivaldi.xml ../cleaners/helium.xml ../cleaners/safari.xml
+#: ../cleaners/chromium.xml ../cleaners/slack.xml ../cleaners/brave.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+#: ../cleaners/opera.xml ../cleaners/discord.xml
+msgid ""
+"Delete the history which includes visited sites, downloads, and thumbnails"
+msgstr "Sfeḍ azray i yegbren ismal yettwarzan, isadaren d tenfulin"
+
+#: ../cleaners/vivaldi.xml ../cleaners/helium.xml ../cleaners/chromium.xml
+#: ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/microsoft_edge.xml
+msgid "Sync"
+msgstr "Amtawi"
+
+#: ../cleaners/vivaldi.xml ../cleaners/helium.xml ../cleaners/chromium.xml
+#: ../cleaners/brave.xml ../cleaners/google_chrome.xml
+#: ../cleaners/microsoft_edge.xml
+msgid "Delete the sync data (including web apps) and sign out of the browser"
+msgstr ""
+"Kkes isefka n umtawi (gar-asen isnasen Web), syen ffeɣ seg tɣimit n yiminig"
+
+#: ../cleaners/helium.xml ../cleaners/chromium.xml ../cleaners/brave.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+msgid "Search engines"
+msgstr "Imsaddayen n unadi"
+
+#. 'Factory' means a search engine that is installed by default 'from the factory,' but this is different than a 'default search engine' https://lists.launchpad.net/launchpad-translators/msg00283.html
+#: ../cleaners/helium.xml ../cleaners/chromium.xml ../cleaners/brave.xml
+#: ../cleaners/google_chrome.xml ../cleaners/microsoft_edge.xml
+msgid ""
+"Reset the search engine usage history and delete non-factory search engines, "
+"some of which are added automatically"
+msgstr ""
+"Ales awennez n uzray n useqdec n yimsaddayen n unadi, kkes imsaddayen n "
+"unadi ur d-yeddin ara d yiminig seg tazwara, ihi kra seg-sen ttwarennun s "
+"wudem awurman"
+
+#: ../cleaners/secondlife_viewer.xml ../cleaners/warzone2100.xml
+#: ../cleaners/nexuiz.xml ../cleaners/hippo_opensim_viewer.xml
+#: ../cleaners/gl-117.xml ../cleaners/tremulous.xml
+msgid "Game"
+msgstr "Urar"
+
+#. This software edits metadata tags, such as title and artist, in audio files
+#: ../cleaners/easytag.xml
+msgid "Audio files tagger"
+msgstr "Amaẓrag n tebzimin n ifuyla imeslawen"
+
+#: ../cleaners/journald.xml
+msgid "System journals"
+msgstr "Iɣmisen n unagraw"
+
+#: ../cleaners/journald.xml
+msgid "Clean old system journals"
+msgstr "Sfeḍ iɣmisen iqburen n unagraw"
+
+#: ../cleaners/emesene.xml
+msgid "Delete the avatars and emoticons cache"
+msgstr "Sfeḍ tazarkatut n yivaṭaren d yimujiten"
+
+#: ../cleaners/filezilla.xml ../cleaners/smartftp.xml
+#: ../cleaners/transmission.xml ../cleaners/gftp.xml ../cleaners/amule.xml
+#: ../cleaners/vuze.xml
+msgid "File transfer client"
+msgstr "Amsaɣ n usiweḍ n ifuyla"
+
+#: ../cleaners/epiphany.xml
+msgid "Places"
+msgstr "Idigan"
+
+#: ../cleaners/epiphany.xml
+msgid ""
+"A database of URLs including bookmarks, favicons, and a history of visited "
+"websites"
+msgstr ""
+"Taffa n yisefka n tansiwin URL i deg llant tecraḍ n yisebtar, tignitin n "
+"yismal d uzray n yismal Web yettwarzan"
+
+#: ../cleaners/epiphany.xml
+msgid "This option deletes all bookmarks."
+msgstr "Taxtiṛit-a ad tekkes akk ticraḍ n yisebtar."
+
+#: ../cleaners/gpodder.xml ../cleaners/exaile.xml
+msgid "Downloaded podcasts"
+msgstr "Ipudkasten yettwasidren"
+
+#: ../cleaners/gpodder.xml ../cleaners/exaile.xml
+msgid "Delete downloaded podcasts"
+msgstr "Kkes ipudkasten yettwasidren"
+
+#: ../cleaners/geary.xml ../cleaners/thunderbird.xml ../cleaners/evolution.xml
+msgid "Email client"
+msgstr "Amsaɣ n yimayl"
+
+#: ../cleaners/geary.xml
+msgid "Attachments"
+msgstr "Tisiway yernan"
+
+#: ../cleaners/geary.xml
+msgid "Sync conflict"
+msgstr "Amgirred n umtawi"
+
+#: ../cleaners/geary.xml ../cleaners/deepscan.xml
+msgid "This option is slow."
+msgstr "Taxtiṛit-a tettɛeṭṭil."
+
+#: ../cleaners/wine.xml
+msgid "Compatibility layer for Windows software"
+msgstr "Tissi n umṣada i yiseɣẓanen n Windows"
+
+#: ../cleaners/thumbnails.xml ../cleaners/windows_explorer.xml
+msgid "Thumbnails"
+msgstr "Tinfulin"
+
+#: ../cleaners/thumbnails.xml
+msgid "Icons for files on the system"
+msgstr "Tignitin i yifuyla yellan deg unagraw"
+
+#: ../cleaners/gnome.xml ../cleaners/kde.xml
+msgid "Desktop environment"
+msgstr "Tawennaṭ n ufellaru"
+
+#. In GNOME 'Run' is the dialog shown when typing ALT+F2'
+#. In Windows 'Run' is the dialog in the Start menu
+#: ../cleaners/gnome.xml ../cleaners/windows_explorer.xml
+msgid "Run"
+msgstr "Selkem"
+
+#: ../cleaners/gnome.xml ../cleaners/windows_explorer.xml
+#: ../cleaners/google_toolbar.xml
+msgid "Search history"
+msgstr "Azray n unadi"
+
+#: ../cleaners/gnome.xml ../cleaners/windows_explorer.xml
+#: ../cleaners/google_toolbar.xml
+msgid "Delete the search history"
+msgstr "Sfeḍ azray n unadi"
+
+#: ../cleaners/konqueror.xml
+msgid "Current session"
+msgstr "Tiɣimit tamirant"
+
+#: ../cleaners/konqueror.xml
+msgid "Delete the current session"
+msgstr "Kkes tiɣimit tamirant"
+
+#: ../cleaners/windows_explorer.xml ../cleaners/nautilus.xml ../cleaners/mc.xml
+msgid "File manager"
+msgstr "Asefrak n ifuyla"
+
+#. TRANSLATORS: Name of a cleaning option for the history of recently used files.
+#: ../cleaners/windows_explorer.xml ../cleaners/gwenview.xml
+#: ../cleaners/gedit.xml ../cleaners/kde.xml ../bleachbit/Cleaner.py
+msgid "Recent documents list"
+msgstr "Tabdart n yisemliyen yettwasqedcen melmi kan"
+
+#: ../cleaners/windows_explorer.xml
+msgid ""
+"This option will reset pinned locations in Quick Access to their defaults."
+msgstr ""
+"Taxtiṛit-a ad terr idigan yettwasentḍen deg « Addaf arurad » ɣer waddad-nsen "
+"n lexṣas."
+
+#: ../cleaners/windows_explorer.xml
+msgid "Shellbags"
+msgstr ""
+
+#: ../cleaners/windows_explorer.xml
+msgid "Delete the usage date, window position, and other data for folders"
+msgstr "Kkes azemz n useqdec, ideg n usfaylu d yisefka nniḍen ɣef yikaramen"
+
+#: ../cleaners/windows_explorer.xml
+msgid "This will reset the position of desktop icons."
+msgstr ""
+"Taxtiṛit-a ad terr idigan n tegnitin n ufellaru ɣer waddad-nsen n lexṣas."
+
+#: ../cleaners/windows_explorer.xml
+msgid "This will restart Windows Explorer."
+msgstr "Taxtiṛit-a ad tessenkker Anaram n ifuyla n Windows tikkelt nniḍen."
+
+#: ../cleaners/windows_defender.xml
+msgid "Anti-virus"
+msgstr "Amgel-anfafad"
+
+#: ../cleaners/windows_defender.xml
+msgid "Quarantine"
+msgstr "Aɛzal"
+
+#: ../cleaners/thunderbird.xml
+msgid ""
+"Deleting the index will reset the configuration of columns in the message "
+"list."
+msgstr ""
+"Tukksa n umatar ad terr tawila n tgejda deg tebdart n yiznan ɣer waddad-is n "
+"lexṣas."
+
+#: ../cleaners/thunderbird.xml
+msgid "Session restore"
+msgstr "Tiririt n tɣimit"
+
+#: ../cleaners/thunderbird.xml
+msgid "Restores the previous session when the browser next starts"
+msgstr "Ad d-terr tiɣimit yezrin mi ara yekker yiminig tikkelt i d-iteddun"
+
+#: ../cleaners/apt.xml
+msgid "Delete obsolete files"
+msgstr "Kkes ifuyla ur yesri ara useɣẓan tura"
+
+#: ../cleaners/apt.xml
+msgid "Package lists"
+msgstr "Tibdarin n yikemmas"
+
+#. Cleaner description: the category of application. 'Container' means a software container that packages and runs applications in isolation, not a physical shipping container.
+#: ../cleaners/docker.xml
+msgid "Container platform"
+msgstr "Tiɣeṛɣeṛt n yinagbaren"
+
+#. Label for Claude coding assistant
+#: ../cleaners/docker.xml ../cleaners/claude.xml
+msgid "AI assistant"
+msgstr "Amallal n tigzi taragmawant"
+
+#. Description for deleting Claude Code sessions
+#: ../cleaners/docker.xml ../cleaners/claude.xml
+msgid "Delete the conversation history"
+msgstr "Sfeḍ azray n idiwenniyen"
+
+#: ../cleaners/android_studio.xml
+msgid "Development environment"
+msgstr "Tawennaṭ n usnefli"
+
+#: ../cleaners/android_studio.xml
+msgid "Gradle cache"
+msgstr "Tazarkatut n Gradle"
+
+#: ../cleaners/android_studio.xml
+msgid "Delete downloaded dependencies and build artifacts"
+msgstr ""
+
+#: ../cleaners/android_studio.xml
+msgid "Dependencies will need to be downloaded on the next build."
+msgstr ""
+
+#: ../cleaners/android_studio.xml
+msgid "IDE cache"
+msgstr "Tazarkatut n IDE"
+
+#. Cleaner description for vim, VS Code, etc.
+#: ../cleaners/vscode.xml ../cleaners/gedit.xml ../cleaners/vim.xml
+msgid "Editor"
+msgstr "Amaẓrag"
+
+#: ../cleaners/x11.xml
+msgid "Windowing system"
+msgstr "Anagraw n usexdem n yisfuyla"
+
+#: ../cleaners/gimp.xml
+msgid "Graphics editor"
+msgstr "Amaẓrag udlif"
+
+#: ../cleaners/snap.xml
+msgid "Disabled"
+msgstr "Yensa"
+
+#: ../cleaners/snap.xml
+msgid "Remove disabled packages"
+msgstr "Kkes ikemmas yensan"
+
+#: ../cleaners/adobe_reader.xml
+msgid "Document viewer"
+msgstr "Ameskan n yisemliyen"
+
+#: ../cleaners/nautilus.xml
+msgid "Custom folders will be reset."
+msgstr "Ikaramen yugnen ad uɣalen ɣer waddad-nsen n lexṣas."
+
+#. Pre-edit snapshots of files Claude Code changed, used for checkpoint restore
+#: ../cleaners/claude.xml
+msgid "File history"
+msgstr "Azray n ifuyla"
+
+#. Claude Code: checkpoint restore for past sessions. Also, do not translate /restore, which is a command.
+#: ../cleaners/claude.xml
+msgid "Delete the file history used for /restore"
+msgstr "Sfeḍ azray n ifuyla yettwasqedcen i /restore"
+
+#. Claude Code's automatically saved notes, reused in later sessions. Memory refers to saved information, not RAM.
+#: ../cleaners/claude.xml
+msgid "Auto memory"
+msgstr "Tizmilin yettwaḥerzen s wudem awurman"
+
+#: ../cleaners/claude.xml
+msgid ""
+"Delete the notes Claude Code automatically saves about you and your projects"
+msgstr ""
+"Kkes tizmilin i iḥerrez Claude Code s wudem awurman fell-ak·im d yisenfaṛen-"
+"ik·im"
+
+#: ../cleaners/claude.xml
+msgid ""
+"Claude Code would forget the information it automatically saved about you "
+"and your projects"
+msgstr ""
+"Claude Code ad yettu talɣut i yeḥrez s wudem awurman fell-ak·im d yisenfaṛen-"
+"ik·im"
+
+#: ../cleaners/claude.xml
+msgid "You would lose resume, continue, and rewind for past sessions"
+msgstr ""
+"Ad tesruḥeḍ timahilin « Kemmel seg wanda i teḥbseḍ », « Kemmel » d « Uɣal "
+"ɣer deffir » i tɣimiyin yezrin"
+
+#. In Claude Code: captured shell environment used by the Bash tool
+#: ../cleaners/claude.xml
+msgid "Shell snapshots"
+msgstr "Tuṭṭfiwin n waddad n Shell"
+
+#: ../cleaners/deepscan.xml
+msgid "Deep scan"
+msgstr "Aḍummu lqayen"
+
+#: ../cleaners/deepscan.xml
+msgid "Clean files widely scattered across the disk"
+msgstr "Sfeḍ ifuyla yettwazuzren deg waṭas n yidigan deg uḍebsi"
+
+#: ../cleaners/deepscan.xml
+msgid "Inspect the preview for any files you want to keep."
+msgstr "Sekyed taskant akken ad twaliḍ ma llan ifuyla i tebɣiḍ ad tḥerzeḍ."
+
+#: ../cleaners/deepscan.xml
+msgid ""
+"This option is slow. Inspect the preview for files you want to keep, like "
+"those bundled with applications."
+msgstr ""
+"Taxtiṛit-a tettɛeṭṭil. Sekyed taskant, nadi deg-s ɣef yifuyla i tebɣiḍ ad "
+"tḥerzeḍ, am wid i d-yeddan d yisnasen."
+
+#: ../cleaners/deepscan.xml
+msgid "VIM swap files under user profile"
+msgstr "Ifuyla n usemselsi n VIM deg umaɣnu n useqdac"
+
+#: ../cleaners/deepscan.xml
+msgid "VIM swap files across system"
+msgstr "Ifuyla n usemselsi n VIM deg unagraw meṛṛa"
+
+#: ../cleaners/zoom.xml
+msgid "Recordings"
+msgstr "Ikalasen"
+
+#: ../cleaners/zoom.xml
+msgid "Delete the audio and video recordings"
+msgstr "Kkes ikalasen n umesli d uvidyu"
+
+#: ../cleaners/recoll.xml
+msgid "Delete the search index, a database of words and the files they contain"
+msgstr ""
+"Kkes amatar n unadi, d taffa n yisefka i yegbren awalen d yifuyla ideg llan"
+
+#: ../cleaners/skype.xml
+msgid "Installers"
+msgstr "Isebdaden"
+
+#: ../cleaners/skype.xml
+msgid "Delete cached patches and installers"
+msgstr "Kkes iseɣtiyen d yisebdaden yettwaḥerzen deg tzarkatut"
+
+#: ../cleaners/seamonkey.xml ../cleaners/internet_explorer.xml
+msgid "Download history"
+msgstr "Azray n yisadaren"
+
+#: ../cleaners/seamonkey.xml
+msgid "List of files downloaded"
+msgstr "Tabdart n ifuyla i d-yettwasadren"
+
+#: ../cleaners/seamonkey.xml
+msgid "Delete the list of visited web pages"
+msgstr "Sfeḍ tabdart n yisebtar Web yettwarzan"
+
+#. Cleaning option that deletes AI models in a web browser.
+#: ../cleaners/google_chrome.xml
+msgid "AI"
+msgstr "Tigzi taragmawant"
+
+#: ../cleaners/google_chrome.xml
+msgid "Delete the AI models"
+msgstr "Kkes timudmiwin n tigzi taragmawant"
+
+#: ../cleaners/google_chrome.xml
+msgid "Old versions"
+msgstr "Ileqman iqburen"
+
+#: ../cleaners/google_chrome.xml
+msgid "Delete program files from previous versions left behind by updates"
+msgstr "Kkes ifuyla n wahil n yileqman yezrin i d-yeqqimen deg umucceḍ"
+
+#. Torrent software can block a list of IP addresses, such as those that may belong to malware or anti-piracy organizations
+#: ../cleaners/transmission.xml
+msgid "Blocklists"
+msgstr "Tibdarin n usewḥel"
+
+#: ../cleaners/transmission.xml
+msgid "Blocklists will need to be updated to work."
+msgstr "Ilaq ad ttwamucceḍent tebdarin n usewḥel akken ad ddunt."
+
+#: ../cleaners/transmission.xml
+msgid "Torrents"
+msgstr "Ituṛṛenten"
+
+#: ../cleaners/transmission.xml
+msgid "Delete the torrents (just the metadata but not the files described)"
+msgstr "Kkes ituṛṛenten (iɣefisefka kan, mačči ifuyla s timmad-nsen)"
+
+#: ../cleaners/transmission.xml ../cleaners/vuze.xml
+msgid "Statistics"
+msgstr "Tidaddanin"
+
+#. TRANSLATORS: Description of the Memory dump cleaning option.
+#: ../cleaners/transmission.xml ../cleaners/vlc.xml ../bleachbit/Cleaner.py
+msgid "Delete the file"
+msgstr "Kkes afaylu"
+
+#: ../cleaners/tremulous.xml
+msgid "Delete the list of game servers"
+msgstr "Sfeḍ tabdart n yiqeddacen n wuraren"
+
+#: ../cleaners/profanity.xml
+msgid "Downloaded files"
+msgstr "Ifuyla i d-yettwasadren"
+
+#: ../cleaners/teamviewer.xml
+msgid "Remote control software"
+msgstr "Aseɣẓan n tladna tanmeggagt"
+
+#. TRANSLATORS: Name of a cleaning option for Windows crash dump files.
+#: ../cleaners/vlc.xml ../bleachbit/Cleaner.py
+msgid "Memory dump"
+msgstr "Aḍeffi n tkatut"
+
+#: ../cleaners/screenlets.xml
+msgid "Desktop widgets"
+msgstr "Iwiǧiten n ufellaru"
+
+#: ../cleaners/winrar.xml
+msgid "File archiver"
+msgstr "Aseɣẓan n weɣbaṛ n ifuyla"
+
+#: ../cleaners/amule.xml
+msgid "Known files history"
+msgstr "Azray n ifuyla yettwassnen"
+
+#. https://wiki.amule.org/wiki/Friend
+#: ../cleaners/amule.xml
+msgid "Known clients and friends"
+msgstr "Imsaɣen d yimdukal yettwassnen"
+
+#: ../cleaners/vim.xml
+msgid ""
+"Delete ~/.viminfo which includes file history, command history, and buffers"
+msgstr ""
+"Kkes ~/.viminfo, i yegbren azray n ifuyla, azray n tiludna d tkatutin n "
+"weḥraz"
+
+#: ../cleaners/discord.xml
+msgid ""
+"Delete the web cache, which reduces time to display revisited pages. This "
+"also clears favorited GIFs."
+msgstr ""
+"Sfeḍ tazarkatut Web, i yesneqsen akud i ilaqen i uskan n yisebtar yettwarzan "
+"yakan. Aya ad yesfeḍ daɣen ifuyla GIF imenyafen."
+
+#: ../org.bleachbit.BleachBit.desktop
+msgid "Unnecessary file cleaner"
+msgstr "Afecku n usfaḍ n ifuyla ur nettwasran ara"
+
+#: ../org.bleachbit.BleachBit.desktop ../org.bleachbit.BleachBit.metainfo.xml
+msgid "Free space and maintain privacy"
+msgstr "Slelli tallunt, ḥrez tudert-ik·im tusligt"
+
+#. TRANSLATORS: Name of the developers
+#: ../org.bleachbit.BleachBit.metainfo.xml
+msgid "Andrew Ziem and contributors"
+msgstr "Agurzil"
+
+#: ../org.bleachbit.BleachBit.metainfo.xml
+msgid ""
+"BleachBit frees disk space and maintains privacy by quickly removing "
+"unnecessary files such as cache, cookies, browser history, temporary files, "
+"and system logs. It can also shred files and clean free disk space to "
+"prevent data recovery."
+msgstr ""
+"BleachBit yeslelli tallunt deg uḍebsi, iḥerrez tudert tusligt s tukksa s "
+"tɣawla n ifuyla ur nettwasran ara, am tazarkatut, inagan n tuqqna, azray n "
+"yiminig, ifuyla iskudanen d yiɣmisen n unagraw. Yezmer daɣen ad yesnger "
+"ifuyla, ad yesfeḍ tallunt tilellit n uḍebsi akken ur ttili ara tiririt n "
+"yisefka."
+
+#. TRANSLATORS: Caption for screenshot
+#: ../org.bleachbit.BleachBit.metainfo.xml
+msgid "Default dark mode, showing found junk files"
+msgstr "Askar ubrik n lexṣas, yeskan-d ifuyla ur nettwasran ara i yettwafen"
+
+#. TRANSLATORS: Dialog shown when an older version is detected. {prodname} is replaced with the product name. Do not translate placeholder.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:ALREADY_INSTALLED"
+msgid ""
+"${prodname} is already installed.\n"
+"Click 'OK' to uninstall the old version before upgrading, or click 'Cancel' "
+"to abort the upgrade."
+msgstr ""
+"${prodname} yettwasbedd yakan.\n"
+"Sit ɣef 'OK' akken ad tekkseḍ lqem aqbur uqbel asali n uswir, neɣ sit ɣef "
+"'Sefsex' akken ad tesfesxeḍ asali n uswir."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:BLEACHBIT_MUI_FINISHPAGE_LINK"
+msgid "Visit the ${prodname} website"
+msgstr "Rzu ɣer usmel Web n ${prodname}"
+
+#. TRANSLATORS: Dialog shown when upgrading while the old version of BleachBit is still running. Instructs the user to close it and click Retry, or click Cancel to exit.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:BLEACHBIT_RUNNING"
+msgid ""
+"${prodname} is running.\n"
+"Close it and click 'Retry' to continue, or click 'Cancel' to abort the "
+"installation."
+msgstr ""
+"${prodname} itteddu.\n"
+"Mdel-it, sit ɣef 'Ɛreḍ tikkelt nniḍen' akken ad tkemmleḍ, neɣ sit ɣef "
+"'Sefsex' akken ad tesfesxeḍ asbeddi."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:INSTALLER_CAPTION"
+msgid "${prodname} ${VERSION} Setup"
+msgstr "Asbeddi n ${prodname} ${VERSION}"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIPRINT1"
+msgid ""
+"The next step is building the font cache, during which a black console "
+"window may appear."
+msgstr ""
+"Asurif i d-iteddun d lebni n tzarkatut n tsefsiyin. Deg wakud-a, yezmer ad d-"
+"iban usfaylu aberkan n tdiwent."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIPRINT2"
+msgid ""
+"It usually finishes in one minute, but sometimes it takes up to ten minutes."
+msgstr ""
+"Yettfakka s umata deg yiwet n tesdat, maca tikwal yezmer ad yaweḍ ar mraw n "
+"tesdatin."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_ADMIN_ACCOUNT_LOGIN_REQUIRED"
+msgid ""
+"You need to log in with an account that is a member of the administrators "
+"group to continue."
+msgstr ""
+"Ilaq ad teqqneḍ s umiḍan yellan d aɛeggal n ugraw n yinedbalen akken ad "
+"tkemmleḍ."
+
+#. TRANSLATORS: Message shown on the installation mode page description when admin rights are needed.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_ADMIN_CREDENTIALS_REQUIRED"
+msgid "Administrator credentials required."
+msgstr "Ilaq isefka n usesteb n unedbal."
+
+#. TRANSLATORS: Message shown on the installation mode page description when admin rights are needed to uninstall.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_ADMIN_UNINSTALL_CREDENTIALS_REQUIRED"
+msgid "Administrator credentials required to uninstall."
+msgstr "Tlaq tseglut n unedbal akken ad tekkseḍ aseɣẓan."
+
+#. TRANSLATORS: Radio button label. The & sets the keyboard accelerator (hotkey). Place & before the letter that should be the shortcut key.
+#. TRANSLATORS: The character '&' positions the keyboard accelerator key.
+#. TRANSLATORS: For example, '&anyone' sets 'a' as the accelerator key (Alt+a).
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_ALL_USERS"
+msgid "For &anyone who uses this computer (all users)"
+msgstr "I &yal win i yesseqdacen aselkim-a (akk iseqdacen)"
+
+#. TRANSLATORS: Radio button label for Ultra Modern UI (NSIS). Same as MULTIUSER_ALL_USERS but without the & accelerator.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_ALL_USERS_UMUI"
+msgid "For anyone who uses this computer (all users)"
+msgstr "I yal win i yesseqdacen aselkim-a (akk iseqdacen)"
+
+#. TRANSLATORS: Radio button label. The & sets the keyboard accelerator (hotkey). Place & before the letter that should be the shortcut key. {USER} is a placeholder that will be replaced with the Windows username.
+#. TRANSLATORS: The character '&' positions the keyboard accelerator key.
+#. TRANSLATORS: For example, '&anyone' sets 'a' as the accelerator key (Alt+a).
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_CURRENT_USER"
+msgid "For &me ({USER})"
+msgstr "I &nekki ({USER})"
+
+#. TRANSLATORS: Radio button label for Ultra Modern UI (NSIS). Same as MULTIUSER_CURRENT_USER but without the & accelerator. {USER} is a placeholder that will be replaced with the Windows username.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_CURRENT_USER_UMUI"
+msgid "For me ({USER})"
+msgstr "I nekki ({USER})"
+
+#. TRANSLATORS: Error message shown in dialog box during installation on Windows. {ERROR} is a placeholder that will be replaced with the error details.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_ELEVATION_ERROR"
+msgid "Unable to elevate, error {ERROR}."
+msgstr "D awezɣi asali n tseglut, tuccḍa {ERROR}."
+
+#. TRANSLATORS: Error message shown in a dialog box when Windows does not support elevation.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_ELEVATION_NOT_SUPPORTED"
+msgid "The operating system doesn't support elevation."
+msgstr "Anagraw n wammud ur isefrak ara asali n tseglut."
+
+#. TRANSLATORS: Radio button option for the method of installation. {VERSION} and {FOLDER} are placeholders replaced by the installer with the installed version and folder path.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_INSTALLED_ALL_USERS"
+msgid "Version {VERSION} is installed for all users in \"{FOLDER}\"."
+msgstr "Lqem {VERSION} yettwasbedd i akk iseqdacen deg \"{FOLDER}\"."
+
+#. TRANSLATORS: Radio button option for the method of installation. {VERSION} and {FOLDER} are placeholders replaced by the installer with the installed version and folder path.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_INSTALLED_CURRENT_USER"
+msgid "Version {VERSION} is installed for the current user in \"{FOLDER}\"."
+msgstr "Lqem {VERSION} yettwasbedd i useqdac amiran deg \"{FOLDER}\"."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_INSTALL_HEADER"
+msgid ""
+"Select whether to install $(^NameDA) for all users or for the current user."
+msgstr ""
+"Fren ma tebɣiḍ ad tesbeddeḍ $(^NameDA) i akk iseqdacen neɣ i useqdac amiran."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_INSTALL_PAGE_SUBTITLE"
+msgid "Choose for which users to install $(^NameDA)."
+msgstr "Fren iseqdacen i wumi ara tesbeddeḍ $(^NameDA)."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_INVALID_PARAMS"
+msgid "Invalid combination of parameters."
+msgstr "Tuddsa n yiɣewwaṛen tarameɣtut."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_LOGON_SERVICE_NOT_RUNNING"
+msgid "Unable to elevate, Secondary Logon service not running."
+msgstr ""
+"D awezɣi asali n tseglut, tanfa n tuqqna tis snat (Secondary Logon) ur "
+"tetteddu ara."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_NEW_INSTALLATION_ALL_USERS"
+msgid "Fresh installation for all users."
+msgstr "Asbeddi amaynut i akk iseqdacen."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_NEW_INSTALLATION_CURRENT_USER"
+msgid "Fresh installation for the current user."
+msgstr "Asbeddi amaynut i useqdac amiran."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_NOT_INSTALLED"
+msgid "There is no installation of $(^NameDA)."
+msgstr "Ulac asbeddi n $(^NameDA)."
+
+#. TRANSLATORS: Title of the installation mode page in the Windows installer. User selects whether to install for all users or the current user.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_PAGE_TITLE"
+msgid "Choose Users"
+msgstr "Fren iseqdacen"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_REINSTALL_DIFF_VERSION_ALL_USERS"
+msgid ""
+"Uninstall version {OLD_VERSION} and install version {VERSION} for all users."
+msgstr "Kkes lqem {OLD_VERSION}, tesbeddeḍ lqem {VERSION} i akk iseqdacen."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_REINSTALL_DIFF_VERSION_CURRENT_USER"
+msgid ""
+"Uninstall version {OLD_VERSION} and install version {VERSION} for the "
+"current user."
+msgstr "Kkes lqem {OLD_VERSION}, sbedd lqem {VERSION} i useqdac amiran."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_REINSTALL_SAME_VERSION_ALL_USERS"
+msgid "Reinstall version {VERSION} for all users."
+msgstr "Ales asbeddi n lqem {VERSION} i akk iseqdacen."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_REINSTALL_SAME_VERSION_CURRENT_USER"
+msgid "Reinstall version {VERSION} for the current user."
+msgstr "Ales asbeddi n lqem {VERSION} i useqdac amiran."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_RUN_AS_ADMIN"
+msgid "You need to run this program as an administrator."
+msgstr "Ilaq ad tselkmeḍ ahil-a d anedbal."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_UNINSTALL_HEADER"
+msgid ""
+"$(^NameDA) is installed both for all users and for the current user.\n"
+"Select which installation to remove."
+msgstr ""
+"$(^NameDA) yettwasbedd i akk iseqdacen, yerna yettwasbedd daɣen i useqdac "
+"amiran.\n"
+"Fren asbeddi i tebɣiḍ ad tekkseḍ."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:MULTIUSER_UNINSTALL_PAGE_SUBTITLE"
+msgid "Choose for which users to remove $(^NameDA)."
+msgstr "Fren iseqdacen i wumi ara tekkseḍ $(^NameDA)."
+
+#. TRANSLATORS: Dialog shown when the installer detects an old version of Windows. Instructs the user to click OK to download a compatible version or Cancel to exit.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:OLD_WINDOWS_WARNING"
+msgid ""
+"This version of BleachBit requires Windows 10 or later. To download a "
+"compatible version for your system, click OK. To exit the installer, click "
+"Cancel."
+msgstr ""
+"Lqem-a n BleachBit yesra Windows 10 neɣ lqem i t-id-yeḍfren. Akken ad d-"
+"tsidreḍ lqem yemṣadan d unagraw-ik·im, sit ɣef OK. Akken ad teffɣeḍ seg "
+"usebdad, sit ɣef Sefsex."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_CORE_DESCRIPTION"
+msgid ""
+"These are the basic files needed for ${prodname} to function (required)."
+msgstr "D ifuyla igejdanen i yesra ${prodname} akken ad yeddu (ttwasran)."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_CORE_NAME"
+msgid "Core files (required)"
+msgstr "Ifuyla igejdanen (ttwasran)"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_DESKTOP_DESCRIPTION"
+msgid "Create a shortcut on the desktop."
+msgstr "Snulfu-d anegzum deg ufellaru."
+
+#. TRANSLATORS: Name of the desktop section in the Windows installer: user selects which desktop items to install.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_DESKTOP_NAME"
+msgid "Desktop"
+msgstr "Tanarit"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_INTEGRATE_SHRED_DESCRIPTION"
+msgid ""
+"Add an option to delete files from the file context menu in Windows Explorer."
+msgstr ""
+"Rnu taxtiṛit n tukksa n ifuyla deg wumuɣ n usatal n ufaylu deg Unaram n "
+"ifuyla n Windows."
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_INTEGRATE_SHRED_NAME"
+msgid "Integrate Shred"
+msgstr "Seddu amsengar"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_QUICK_LAUNCH_DESCRIPTION"
+msgid "Create a shortcut on the Quick Launch bar."
+msgstr "Snulfu-d anegzum deg tfeggagt n usenker arurad."
+
+#. TRANSLATORS: Name of the quick launch section in the Windows installer: quick launch is a toolbar in the Windows taskbar that allows users to quickly access frequently used programs.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_QUICK_LAUNCH_NAME"
+msgid "Quick Launch"
+msgstr "Asenker arurad"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_SHORTCUTS_DESCRIPTION"
+msgid "Create shortcuts to ${prodname}"
+msgstr "Snulfu-d inegzumen ɣer ${prodname}"
+
+#. TRANSLATORS: Name of the shortcuts section in the Windows installer: user selects which shortcuts to install.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_SHORTCUTS_NAME"
+msgid "Shortcuts"
+msgstr "Inegzumen"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_START_MENU_DESCRIPTION"
+msgid "Create a shortcut in the Start menu."
+msgstr "Snulfu-d anegzum deg wumuɣ n usenker."
+
+#. TRANSLATORS: Name of the start menu section in the Windows installer: user selects which start menu items to install.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_START_MENU_NAME"
+msgid "Start menu"
+msgstr "Umuɣ n usenker"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_TRANSLATIONS_DESCRIPTION"
+msgid ""
+"Install language files to use ${prodname} in your preferred local language."
+msgstr ""
+"Sbedd ifuyla n tutlayt akken ad tesqedceḍ ${prodname} s tutlayt tadigant i "
+"tḥemmleḍ."
+
+#. TRANSLATORS: Name of the translations section in the Windows installer: user selects which translations to install.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_TRANSLATIONS_NAME"
+msgid "Translations"
+msgstr "Tisuqqilin"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SECTION_UNINSTALL_DESCRIPTION"
+msgid "Add an uninstall program."
+msgstr "Rnu ahil n tukksa n useɣẓan."
+
+#. TRANSLATORS: Shortcut name for a desktop shortcut that opens a debugging terminal.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SHORTCUT_DEBUGGING_TERMINAL"
+msgid "${prodname} Debugging Terminal"
+msgstr "Ixf n useɣti n ${prodname}"
+
+#. TRANSLATORS: Shortcut name for a desktop shortcut that runs without UAC elevation (admin privileges).
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SHORTCUT_NO_UAC"
+msgid "${prodname} (No UAC)."
+msgstr "${prodname} (war UAC)."
+
+#. TRANSLATORS: Context menu item in Windows Explorer for securely shredding files.
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:SHRED_SHELL_MENU"
+msgid "Shred with ${prodname}"
+msgstr "Senger s ${prodname}"
+
+#: windows/NsisInclude/NsisMultiUserLang.nsh
+msgctxt "nsis:UNINSTALL_TEXT"
+msgid ""
+"${prodname} will be uninstalled from the following folder.\n"
+"Click Uninstall to start the uninstallation.\n"
+"Files you added to this folder, such as custom cleaners, are kept."
+msgstr ""
+"${prodname} ad yettwakkes seg ukaram-a.\n"
+"Sit ɣef « Kkes » akken ad tebdu tukksa.\n"
+"Ifuyla i terniḍ ɣer ukaram-a, am yifecka n usfaḍ yugnen, ad qqimen."
+
+#. TRANSLATORS: Multi-value variables are explained
+#. in the online documentation. Basically, they are like
+#. an environment variable, but each multi-value variable
+#. can have multiple values. They're a way to make CleanerML
+#. files more concise.
+#: ../bleachbit/Action.py
+msgid "Deep scan does not support multi-value variables."
+msgstr "Aḍummu lqayen ur isefrak ara imuttiyen igetazalen."
+
+#. TRANSLATORS: This is a lint-style warning that there seems to be a
+#. mild mistake in the CleanerML file because walk.all is expected to
+#. be used with directories instead of with files. Do not translate
+#. search="walk.all" and path="%s"
+#: ../bleachbit/Action.py
+#, python-format
+msgid "search=\"walk.all\" used with regular file path=\"%s\""
+msgstr "search=\"walk.all\" yettwaseqdec s ubrid n ufaylu amagnu=\"%s\""
+
+#. TRANSLATORS: This is a lint-style warning that the CleanerML file
+#. specified a search for glob, but the path specified didn't have any
+#. wildcard patterns. Therefore, maybe the developer either missed
+#. the wildcard or should search using path="file" which does not
+#. expect or support wildcards in the path.
+#: ../bleachbit/Action.py
+#, python-format
+msgid "path=\"%s\" is not a glob pattern"
+msgstr "path=\"%s\" mačči d tamudemt glob"
+
+#. TRANSLATORS: This is the name of a cleaning action. 'Clean' is a verb.
+#. It shows in the log of actions performed.
+#: ../bleachbit/Action.py
+msgid "Clean cookies"
+msgstr "Sfeḍ inagan n tuqqna"
+
+#. TRANSLATORS: %s is the command line to be executed
+#: ../bleachbit/Action.py
+#, python-format
+msgid "Run external command: %s"
+msgstr "Selkem taladna tazɣarayt: %s"
+
+#. TRANSLATORS: Label in the log for an action that stops a running
+#. process. 'Terminate' is a verb. {name} is the executable name
+#. (for example, explorer.exe). Do not translate {name}.
+#: ../bleachbit/Action.py
+#, python-brace-format
+msgid "Terminate process: {name}"
+msgstr "Ḥbes akala: {name}"
+
+#. TRANSLATORS: This is the name of an action. 'Refresh' is a verb.
+#: ../bleachbit/Action.py
+msgid "Refresh Windows shell"
+msgstr "Smiren Shell n Windows"
+
+#: ../bleachbit/Bootstrap.py
+msgid ""
+"To run a GUI application on Wayland with root, allow access with this "
+"command:\n"
+"xhost si:localuser:root\n"
+"See more about xhost at https://docs.bleachbit.org/doc/frequently-asked-"
+"questions.html"
+msgstr ""
+"Akken ad tselkmeḍ asnas s ugrudem udlif deg Wayland s tseglut n root, sireg "
+"addaf s tladna-a:\n"
+"xhost si:localuser:root\n"
+"I wugar n telɣut ɣef xhost, wali https://docs.bleachbit.org/doc/frequently-"
+"asked-questions.html"
+
+#: ../bleachbit/CleanerML.py
+#, python-brace-format
+msgid ""
+"Error in handle_cleaner_option() for cleaner id = {cleaner_id}, option "
+"XML={option_xml}"
+msgstr ""
+"Tuccḍa deg twuri handle_cleaner_option() i usulay n ufecku n usfaḍ = "
+"{cleaner_id}, taxtiṛit XML={option_xml}"
+
+#. TRANSLATORS: Warning printed to the log. %s expands to the
+#. path of the XML cleaner file that was skipped
+#: ../bleachbit/CleanerML.py
+#, python-format
+msgid "Ignoring cleaner because it is world writable: %s"
+msgstr "Afecku n usfaḍ ad yettwazgel acku yal aseqdac yezmer ad yaru deg-s: %s"
+
+#. TRANSLATORS: Warning printed to the log. %s expands to the
+#. path of the XML cleaner file whose directory is world
+#. writable.
+#: ../bleachbit/CleanerML.py
+#, python-format
+msgid "Ignoring cleaner because its directory is world writable: %s"
+msgstr ""
+"Afecku n usfaḍ ad yettwazgel acku yal aseqdac yezmer ad yaru deg ukaram-is: "
+"%s"
+
+#. TRANSLATORS: Error message printed to the log.
+#. %s expands to the path of the XML cleaner file
+#: ../bleachbit/CleanerML.py
+#, python-format
+msgid "Error reading cleaner: %s"
+msgstr "Tuccḍa deg tɣuri n ufecku n usfaḍ: %s"
+
+#. TRANSLATORS: Cleaner name shown in the list of applications.
+#: ../bleachbit/Cleaner.py
+msgid "System"
+msgstr "Anagraw"
+
+#. TRANSLATORS: Description of the System cleaner.
+#: ../bleachbit/Cleaner.py
+msgid "The system in general"
+msgstr "Anagraw s umata"
+
+#. TRANSLATORS: desktop entries are .desktop files in Linux that
+#. make up the application menu (the menu that shows BleachBit,
+#. Firefox, and others).  The .desktop files also associate file
+#. types, so clicking on an .html file in Nautilus brings up
+#. Firefox.
+#. More information:
+#. https://specifications.freedesktop.org/menu/latest/index.html#introduction
+#: ../bleachbit/Cleaner.py
+msgid "Broken desktop files"
+msgstr "Ifuyla n ufellaru yerẓen"
+
+#. TRANSLATORS: Description of the Broken desktop files cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid "Delete broken application menu entries and file associations"
+msgstr ""
+"Kkes inekcumen yerẓen deg wumuɣen n yisnasen d yiseɣwan n ifuyla yerẓen"
+
+#. TRANSLATORS: Localizations are files supporting specific
+#. languages, so applications appear in Spanish, etc.
+#: ../bleachbit/Cleaner.py
+msgid "Localizations"
+msgstr "Ifuyla n tsuqilt"
+
+#. TRANSLATORS: Description of the Localizations cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid "Delete files for unwanted languages"
+msgstr "Kkes ifuyla n tutlayin ur tebɣiḍ ara"
+
+#. TRANSLATORS: Warning for the Localizations cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid "Configure this option in the preferences."
+msgstr "Swel taxtiṛit-a deg yismenyifen."
+
+#. TRANSLATORS: 'Rotated logs' refers to old system log files.
+#. Linux systems often have a scheduled job to rotate the logs
+#. which means compress all except the newest log and then delete
+#. the oldest log. You could translate this as 'old logs.'
+#: ../bleachbit/Cleaner.py
+msgid "Rotated logs"
+msgstr "Iɣmisen iqburen"
+
+#. TRANSLATORS: Description of the Rotated logs cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid "Delete old system logs"
+msgstr "Kkes iɣmisen iqburen n unagraw"
+
+#. TRANSLATORS: Name of a cleaning option. Trash is a noun.
+#: ../bleachbit/Cleaner.py
+msgid "Trash"
+msgstr "Taqecwalt"
+
+#. TRANSLATORS: Description of the Trash cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid "Empty the trash"
+msgstr "Sfeḍ taqecwalt"
+
+#. TRANSLATORS: Name of a cleaning option for system memory.
+#: ../bleachbit/Cleaner.py ../bleachbit/Worker.py
+msgid "Memory"
+msgstr "Takatut"
+
+#. TRANSLATORS: 'free' means 'unallocated'
+#: ../bleachbit/Cleaner.py
+msgid "Wipe the swap and free memory"
+msgstr "Sfeḍ tallunt n usemselsi d tkatut tilellit"
+
+#. TRANSLATORS: Warning for the experimental Memory cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid "This option is experimental and may cause system problems."
+msgstr "Taxtiṛit-a d tarmitant, tezmer ad d-tawi uguren i unagraw."
+
+#. TRANSLATORS: This is a label for the option to clear the system DNS cache.
+#: ../bleachbit/Cleaner.py
+msgid "DNS cache"
+msgstr "Tazarkatut n DNS"
+
+#. TRANSLATORS: Name of cleaning option. 'Prefetch' is Microsoft Windows jargon.
+#: ../bleachbit/Cleaner.py
+msgid "Prefetch"
+msgstr "Taɣuri tuzwirt (Prefetch)"
+
+#. TRANSLATORS: Name of a cleaning option for the Windows recycle bin.
+#: ../bleachbit/Cleaner.py
+msgid "Recycle bin"
+msgstr "Taqecwalt"
+
+#. TRANSLATORS: Description of the Recycle bin cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid "Empty the recycle bin"
+msgstr "Sfeḍ taqecwalt"
+
+#. TRANSLATORS: Name for cleaning option. 'Update' is an adjective to
+#. describe the kind of uninstallers.
+#: ../bleachbit/Cleaner.py
+msgid "Update uninstallers"
+msgstr "Ahilen n tukksa n yimucceḍen"
+
+#. TRANSLATORS: Description of cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid ""
+"Delete uninstallers for Microsoft updates including hotfixes, service packs, "
+"and Internet Explorer updates"
+msgstr ""
+"Kkes ahilen n tukksa n yimucceḍen n Microsoft, gar-asen iseɣtiyen, ikemmas n "
+"tenfa d yimucceḍen n Internet Explorer"
+
+#. TRANSLATORS: Warning shown when selecting an option.
+#: ../bleachbit/Cleaner.py
+msgid "This option may prevent uninstalling some updates."
+msgstr "Taxtiṛit-a tezmer ad tsewḥel tukksa n kra n yimucceḍen."
+
+#. TRANSLATORS: Name of a cleaning option. Clipboard is a noun.
+#: ../bleachbit/Cleaner.py
+msgid "Clipboard"
+msgstr "Tacfawt"
+
+#. TRANSLATORS: Description of the Clipboard cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid "The desktop environment's clipboard used for copy and paste operations"
+msgstr ""
+"Tacfawt n twennaṭ n ufellaru i yettwasqedcen i temhalin n unɣal d usenteḍ"
+
+#. TRANSLATORS: "Custom" is an option allowing the user to specify which
+#. files and folders will be erased.
+#. TRANSLATORS: Sidebar label for the page where users add their own paths to clean.
+#. Short label meaning "Custom locations".
+#: ../bleachbit/Cleaner.py ../bleachbit/GuiPreferences.py
+msgid "Custom"
+msgstr "Asfaḍ udmawan"
+
+#. TRANSLATORS: Description of the Custom cleaning option.
+#: ../bleachbit/Cleaner.py
+msgid "Delete user-specified files and folders"
+msgstr "Kkes ifuyla d yikaramen i d-yesbadu useqdac"
+
+#. TRANSLATORS: 'empty' means 'unallocated'
+#: ../bleachbit/Cleaner.py
+msgid "Empty space"
+msgstr "Tallunt tilemt"
+
+#. TRANSLATORS: 'empty' means 'unallocated'
+#: ../bleachbit/Cleaner.py
+msgid "Wipe empty space to hide deleted files"
+msgstr "Sfeḍ tallunt tilemt akken ad teffreḍ ifuyla yettwakksen"
+
+#. TRANSLATORS: 'Empty' means 'unallocated.'
+#. %s expands to a path such as C:\ or /tmp/
+#. TRANSLATORS: Shows activity in the CLI, and %s is the path to the directory.
+#: ../bleachbit/Cleaner.py ../bleachbit/CLI.py
+#, python-format
+msgid "Wipe empty space in %s"
+msgstr "Sfeḍ tallunt tilemt deg %s"
+
+#. TRANSLATORS: Progress message shown typically on startup.
+#. 'Native' refers to the .xml cleaners designed for this application,
+#. as contrasted to Winapp2.ini, which is native to another application.
+#. 'Loading' is a present participle.
+#. To indicate an ongoing operation, include the ellipsis as literal
+#. Unicode (…) or as Unicode escape (\u2026).
+#: ../bleachbit/Cleaner.py
+msgid "Loading native cleaners…"
+msgstr "Asali n yifecka n usfaḍ ineṣliyen…"
+
+#. TRANSLATORS: Progress message shown typically on startup.
+#. 'Importing' is a present participle.
+#. To indicate an ongoing operation, include the ellipsis as literal
+#. Unicode (…) or as Unicode escape (\u2026).
+#: ../bleachbit/Cleaner.py
+msgid "Importing cleaners from Winapp2.ini…"
+msgstr "Akter n yifecka n usfaḍ seg ufaylu Winapp2.ini…"
+
+#. TRANSLATORS: %s is the path of the drive whose empty space will be wiped.
+#: ../bleachbit/Cleaner.py
+#, python-format
+msgid "Wipe empty space %s"
+msgstr "Sfeḍ tallunt tilemt %s"
+
+#. TRANSLATORS: Error shown on CLI, and %s is the name of a cleaning action
+#: ../bleachbit/CLI.py
+#, python-format
+msgid "not a valid cleaner: %s"
+msgstr "Mačči d afecku n usfaḍ ameɣtu: %s"
+
+#. TRANSLATORS: Error shown on CLI, and %s is the name of a cleaning action
+#: ../bleachbit/CLI.py
+#, python-format
+msgid "Wildcard characters are not allowed in --except: %s"
+msgstr "Isekkilen wildcard ur ttwasirgen ara deg --except: %s"
+
+#. TRANSLATORS: This is the command line usage.  Don't translate
+#. %prog, but do translate options, cleaner, and option.
+#. Don't translate and add "usage:" - it gets added by Python.
+#. More information about the command line is here
+#. https://www.bleachbit.org/documentation/command-line
+#: ../bleachbit/CLI.py
+msgid "usage: %prog [options] cleaner.option1 [cleaner.option2 ...]"
+msgstr "aseqdec: %prog [tixtiṛiyin] cleaner.option1 [cleaner.option2 ...]"
+
+#. TRANSLATORS: Help for the --list-cleaners command on the CLI,
+#. and 'list' is a verb
+#: ../bleachbit/CLI.py
+msgid "list cleaners"
+msgstr "Sken-d tabdart n yifecka n usfaḍ"
+
+#. TRANSLATORS: Help for the --preview command on the CLI,
+#. and 'preview' is a verb
+#: ../bleachbit/CLI.py
+msgid "preview files to be deleted and other changes"
+msgstr "Sken-d taskant n yifuyla ara yettwakksen d yisenfal-nniḍen"
+
+#. TRANSLATORS: Help for the --clean command on the CLI
+#: ../bleachbit/CLI.py
+msgid "run cleaners to delete files and make other permanent changes"
+msgstr ""
+"Selkem ifecka n usfaḍ akken ad tekkseḍ ifuyla u ad tgeḍ isenfal-nniḍen imezga"
+
+#. TRANSLATORS: Help for the --shred command on the CLI,
+#. and 'shred' is a verb
+#: ../bleachbit/CLI.py
+msgid "shred specific files or folders"
+msgstr "Senger ifuyla neɣ ikaramen i d-tesbaduḍ"
+
+#. TRANSLATORS: Help for the --wipe-empty-space
+#. command on the CLI, and 'wipe' is a verb
+#: ../bleachbit/CLI.py
+msgid "wipe empty space in the given paths"
+msgstr "Sfeḍ tallunt tilemt deg yiberdan i d-yettunefken"
+
+#. TRANSLATORS: Help for the --overwrite option on the CLI,
+#. and 'overwrite' is a verb
+#: ../bleachbit/CLI.py
+msgid "overwrite files to hide contents"
+msgstr "Ales tira ɣef yifuyla akken ad teffreḍ agbur-nsen"
+
+#. TRANSLATORS: Help for the --gui option on the CLI,
+#. and 'launch' is a verb
+#: ../bleachbit/CLI.py
+msgid "launch the graphical interface"
+msgstr "Senker agrudem udlif"
+
+#. TRANSLATORS: Help for the --preset option on the CLI,
+#. and 'use' is a verb, referring to enabling options set earlier.
+#: ../bleachbit/CLI.py
+msgid "use options set in the graphical interface"
+msgstr "Seqdec tixtiṛiyin i yettusbadun deg ugrudem udlif"
+
+#. TRANSLATORS: Help for the --all-but-warning option on the CLI,
+#. and 'enable' is a verb.
+#: ../bleachbit/CLI.py
+msgid "enable all options that do not have a warning"
+msgstr "Rmed akk tixtiṛiyin ur nesɛi ara ulɣu"
+
+#. TRANSLATORS: Help for the --except option on the CLI,
+#. and 'exclude' is a verb.
+#: ../bleachbit/CLI.py
+msgid "exclude cleaner options (can be repeated, comma-separated)"
+msgstr ""
+"Zgel tixtiṛiyin n usfaḍ (tzemreḍ ad tesqedceḍ aɣewwaṛ-a ugar n yiwet n "
+"tikkelt neɣ ad tebḍuḍ tixtiṛiyin s tuccar)"
+
+#. TRANSLATORS: Help for the --debug option on the CLI,
+#. and 'set' is a verb.
+#: ../bleachbit/CLI.py
+msgid "set log level to verbose"
+msgstr "Swel aswir n usekles n yiɣmisen ɣer « verbose »"
+
+#. TRANSLATORS: Help for --debug-log option on the CLI.
+#: ../bleachbit/CLI.py
+msgid "log debug messages to file"
+msgstr "Sekles iznan n useɣti deg ufaylu"
+
+#. TRANSLATORS: Help for --sysinfo option on the CLI.
+#: ../bleachbit/CLI.py
+msgid "show system information"
+msgstr "Sken-d talɣut ɣef unagraw"
+
+#. TRANSLATORS: Help for --version option on the CLI.
+#: ../bleachbit/CLI.py
+msgid "output version information and exit"
+msgstr "Sken-d talɣut n lqem sakin ffeɣ"
+
+#. TRANSLATORS: Help for --no-uac option on the CLI.
+#: ../bleachbit/CLI.py
+msgid "do not prompt for administrator privileges"
+msgstr "Ur ssutur ara taseglut n unedbal"
+
+#. TRANSLATORS: Help for --update-winapp2 command on the CLI.
+#: ../bleachbit/CLI.py
+msgid "update winapp2.ini, if a new version is available"
+msgstr "Mucceḍ winapp2.ini ma yella lqem amaynut"
+
+#. TRANSLATORS: Error message shown on CLI.
+#: ../bleachbit/CLI.py
+msgid ""
+"Specify only one of these commands: --list-cleaners, --wipe-empty-space, --"
+"preview, --clean, --shred"
+msgstr ""
+"Sbadu yiwet kan seg tiludna-a: --list-cleaners, --wipe-empty-space, --"
+"preview, --clean, --shred"
+
+#. TRANSLATORS: Log message on the CLI.
+#: ../bleachbit/CLI.py
+msgid "Checking online for updates to winapp2.ini"
+msgstr "Asenqed ɣef uẓeṭṭa n yimucceḍen i winapp2.ini"
+
+#. TRANSLATORS: Error message on the CLI.
+#: ../bleachbit/CLI.py
+msgid "No directories given for --wipe-empty-space"
+msgstr "Ulac ikaramen i d-yettunefken i --wipe-empty-space"
+
+#. TRANSLATORS: Log message on the CLI.
+#: ../bleachbit/CLI.py
+msgid "Wiping empty space can take a long time."
+msgstr "Asfaḍ n tallunt tilemt yezmer ad yeṭṭef aṭas n wakud."
+
+#. TRANSLATORS: Error message on the CLI.
+#: ../bleachbit/CLI.py
+msgid "No operations selected. Specify cleaner options."
+msgstr "Ulac timhalin yettwafernen. Sbadu tixtiṛiyin n usfaḍ."
+
+#. TRANSLATORS: '--overwrite' and '--clean' are command line options
+#: ../bleachbit/CLI.py
+msgid "--overwrite is intended only for use with --clean"
+msgstr "--overwrite yettuseqdac kan akked --clean"
+
+#. TRANSLATORS: This is the label in the log indicating a path
+#. was skipped because it matches the keep list
+#: ../bleachbit/Command.py
+msgid "Skip"
+msgstr "Zgel"
+
+#. TRANSLATORS: Label in the log indicating a path will be deleted
+#. (for previews) or was actually deleted (clean mode).
+#: ../bleachbit/Command.py
+msgid "Delete"
+msgstr "Kkes"
+
+#. TRANSLATORS: Warning message shown in the progress log.
+#: ../bleachbit/Command.py
+msgid ""
+"At least one file was locked by another process, so its contents could not "
+"be overwritten. It will be marked for deletion upon system reboot."
+msgstr ""
+"Xerṣum yiwen ufaylu yella isekkeṛ-it ukala-nniḍen, ihi ur yezmir ara ad "
+"yales tira ɣef ugbur-is. Ad yettwacreḍ i tukksa mi ara ales usenker n "
+"unagraw."
+
+#. TRANSLATORS: Label in the log when the file will be deleted
+#. when the system reboots. 'Mark' is a verb.
+#: ../bleachbit/Command.py
+msgid "Mark for deletion"
+msgstr "Creḍ i tukksa"
+
+#. TRANSLATORS: The file will be truncated to 0 bytes in length
+#: ../bleachbit/Command.py
+msgid "Truncate"
+msgstr "Gzem"
+
+#. TRANSLATORS: A label of a command to delete a Windows registry key
+#: ../bleachbit/Command.py
+msgid "Delete registry key"
+msgstr "Kkes tasarut n Registry"
+
+#. TRANSLATORS: Button label on (1) the headerbar and (2) the chaff dialog.
+#. 'Abort' is a verb.
+#: ../bleachbit/Constant.py ../bleachbit/GuiWindow.py
+msgid "Abort"
+msgstr "Sefsex"
+
+#. TRANSLATORS: This is the name of a cleaning action. 'Clean' is a verb.
+#. It shows in the log of actions that would be performed (preview mode) or
+#. in the log of actions that are performed (clean mode).
+#: ../bleachbit/Constant.py
+msgid "Clean file"
+msgstr "Sfeḍ afaylu"
+
+#. TRANSLATORS: This message is used in three places (1) label at top of the
+#. preferences dialog (2) confirmation dialog when enabling the cleaning option
+#. (3) log message when starting to clean empty space.
+#: ../bleachbit/Constant.py
+msgid ""
+"Wiping empty space removes traces of files that were deleted without "
+"shredding, but it will not free additional disk space. The process can take "
+"a very long time and may temporarily slow your computer. It is not necessary "
+"if your drive is protected with full-disk encryption. The method works best "
+"on traditional hard drives. On solid-state drives, it is less reliable, and "
+"frequent use contributes to wear."
+msgstr ""
+"Asfaḍ n tallunt tilemt ad yekkes lateṛ n yifuyla yettwakksen war asenger, "
+"maca ur d-yeslelli ara tallunt-nniḍen deg uḍebsi. Akala yezmer ad yeṭṭef "
+"aṭas n wakud u ad yerr aselkim-ik·im ad iɛeṭṭel i kra n wakud. Ur ilaq ara "
+"ma yella aḍebsi-ik·im yettwaḥrez s uwgelhen n uḍebsi s lekmal-is. Tarrayt-a "
+"txeddem akken iwata ugar ɣef yiḍebsiyen iqquranen imensayen. Ɣef yiḍebsiyen "
+"SSD, igmaḍ-is ur ḍminen ara am wakken llan ɣef yiḍebsiyen imensayen, yerna "
+"aseqdec-is s waṭas yesɛa amur deg usenqes n teɣzi n tudert-nsen."
+
+#. TRANSLATORS: Error message shown in the infobar or notice shown in a tooltip.
+#. Expert mode is an option in the preferences to relax guardrails.
+#: ../bleachbit/Constant.py
+msgid "This option requires expert mode. Enable it in Preferences."
+msgstr "Taxtiṛit-a tesra askar n umazzay. Rmed-it deg yismenyifen."
+
+#. TRANSLATORS: Warning in the log when shredding a file could not
+#. overwrite its contents. %(path)s is the file path; %(error)s is
+#. the reason, such as 'Permission denied'.
+#: ../bleachbit/FileUtilities.py
+#, python-format
+msgid "Could not overwrite the contents of %(path)s: %(error)s"
+msgstr "Ur yezmir ara ad yales tira ɣef ugbur n %(path)s: %(error)s"
+
+#. TRANSLATORS: Log message where %s is the pathname.
+#: ../bleachbit/FileUtilities.py
+#, python-format
+msgid "Directory is not empty: %s"
+msgstr "Akaram mačči d ilem: %s"
+
+#. TRANSLATORS: Log message where %s is the pathname.
+#: ../bleachbit/FileUtilities.py
+#, python-format
+msgid "Skipping mount point: %s"
+msgstr "Azgal n tneqqiḍt n userkeb: %s"
+
+#. TRANSLATORS: Log message where %s is the pathname.
+#: ../bleachbit/FileUtilities.py
+#, python-format
+msgid "Device or resource is busy: %s"
+msgstr "Ibenk neɣ taɣbalut yettwaseqdac: %s"
+
+#. TRANSLATORS: Log message where %s is the pathname.
+#: ../bleachbit/FileUtilities.py
+#, python-format
+msgid "Directory was left renamed to: %s"
+msgstr "Akaram yeqqim s yisem amaynut: %s"
+
+#. TRANSLATORS: Log message where %s is the pathname.
+#: ../bleachbit/FileUtilities.py
+#, python-format
+msgid "Special file type cannot be deleted: %s"
+msgstr "Anaw-a n ufaylu uzzig ur yezmir ara ad yettwakkes: %s"
+
+#. TRANSLATORS: This is a warning log message. %s is the directory path.
+#: ../bleachbit/FileUtilities.py
+#, python-format
+msgid ""
+"The environment variable TMP refers to a directory that does not exist: %s"
+msgstr "Amutti n twennaṭ TMP yettawi ɣer ukaram ur nelli ara: %s"
+
+#. TRANSLATORS: Title of the font check dialog
+#: ../bleachbit/FontCheckDialog.py
+msgid "Font check"
+msgstr "Asenqed n tsefsiyin"
+
+#. TRANSLATORS: Button label in the font check dialog
+#: ../bleachbit/FontCheckDialog.py
+msgid "Text is okay"
+msgstr "Aḍris iban akken iwata"
+
+#. TRANSLATORS: Button label in the font check dialog. This is one of
+#. three buttons the user can click to report how the text appears.
+#. The user clicks this if the text is readable but appears fuzzy.
+#: ../bleachbit/FontCheckDialog.py
+msgid "Text is blurry"
+msgstr "Aḍris ur iban ara akken iwata"
+
+#. TRANSLATORS: Button label in the font check dialog in case the font
+#. looks like an alien language. This is one of three buttons the user
+#. can click to report how the text appears.
+#: ../bleachbit/FontCheckDialog.py
+msgid "Text is unrecognizable"
+msgstr "Aḍris ur yettwaɛqal ara"
+
+#. TRANSLATORS: Question shown in the font check dialog displayed
+#. on startup on Windows. There are bugs that for some users the
+#. font is blurry or resembles an alien language.
+#: ../bleachbit/FontCheckDialog.py
+msgid "Does all the text in this window look okay?"
+msgstr "Ma yettban-d uḍris meṛṛa deg usfaylu-a akken iwata?"
+
+#. TRANSLATORS: Title of a file chooser dialog.
+#: ../bleachbit/GuiApplication.py
+msgid "Choose files to shred"
+msgstr "Fren ifuyla ara tesnegreḍ"
+
+#. TRANSLATORS: Title of a folder chooser dialog.
+#: ../bleachbit/GuiApplication.py
+msgid "Choose folder to shred"
+msgstr "Fren akaram ara tesnegreḍ"
+
+#. TRANSLATORS: Button label in a folder chooser dialog.
+#. TRANSLATORS: Label for the Delete button in the file choose dialog
+#. and delete confirmation dialog.
+#: ../bleachbit/GuiApplication.py ../bleachbit/GuiBasic.py
+msgid "_Delete"
+msgstr "_Kkes"
+
+#. TRANSLATORS: Warning log message when attempting to paste files/folders to shred.
+#: ../bleachbit/GuiApplication.py
+msgid "No paths found in clipboard."
+msgstr "Ulac iberdan i yettwafen deg tecfawt."
+
+#. TRANSLATORS: Title of a folder chooser dialog.
+#: ../bleachbit/GuiApplication.py ../bleachbit/GuiPreferences.py
+msgid "Choose a folder"
+msgstr "Fren yiwen n ukaram"
+
+#. TRANSLATORS: Button label in a folder chooser dialog.
+#. Underscore is for accelerator key.
+#: ../bleachbit/GuiApplication.py
+msgid "_OK"
+msgstr "_Ih"
+
+#. TRANSLATORS: Title of the 'About' dialog.
+#: ../bleachbit/GuiApplication.py
+msgid "Program to clean unnecessary files"
+msgstr "Ahil n usfaḍ n yifuyla ur nettwasran ara"
+
+#. TRANSLATORS: License text shown in the 'About' dialog.
+#: ../bleachbit/GuiApplication.py
+msgid ""
+"GNU General Public License version 3 or later.\n"
+"See https://www.gnu.org/licenses/gpl-3.0.txt"
+msgstr ""
+"Turagt tazayezt tamatut n GNU, lqem 3 neɣ lqem i t-id-yeḍfaren.\n"
+"Wali https://www.gnu.org/licenses/gpl-3.0.txt"
+
+#. TRANSLATORS: Maintain the names of translators here.
+#. Launchpad does this automatically for translations
+#. typed in Launchpad. This is a special string shown
+#. in the 'About' box.
+#: ../bleachbit/GuiApplication.py
+msgid "translator-credits"
+msgstr ""
+"Athmane MOKRAOUI\n"
+"Agurzil"
+
+#. TRANSLATORS: Title of the system information dialog.
+#: ../bleachbit/GuiApplication.py
+msgid "System information"
+msgstr "Talɣut ɣef unagraw"
+
+#. TRANSLATORS: Button label in the system information dialog to
+#. replace the username with a placeholder.
+#: ../bleachbit/GuiApplication.py
+msgid "Anonymize"
+msgstr "Sedreg"
+
+#. TRANSLATORS: Label for the Cancel button in several dialog windows:
+#. file chooser, folder choose, delete confirmation, and warning dialogs.
+#. The underscore indicates the accelerator key.
+#: ../bleachbit/GuiBasic.py
+msgid "_Cancel"
+msgstr "_Sefsex"
+
+#. TRANSLATORS: This is a label for the Open button in a file chooser dialog.
+#: ../bleachbit/GuiBasic.py
+msgid "_Open"
+msgstr "_Ldi"
+
+#. TRANSLATORS: Title of the delete confirmation dialog.
+#: ../bleachbit/GuiBasic.py
+msgid "Delete confirmation"
+msgstr "Asentem n tukksa"
+
+#. TRANSLATORS: This message appears in a dialog window when the user
+#. chooses to shred settings and quit.
+#: ../bleachbit/GuiBasic.py
+msgid ""
+"This function deletes all BleachBit settings and then quits the application. "
+"Use this to hide your use of BleachBit or to reset its settings. The next "
+"time you start BleachBit, the settings will initialize to default values."
+msgstr ""
+"Tawuri-a tekkes akk iɣewwaṛen n BleachBit, sakin teffeɣ seg usnas. Seqdec-"
+"itt akken ad teffreḍ aseqdec-ik·im n BleachBit neɣ ad terreḍ iɣewwaṛen-is "
+"ɣer wazalen n lexṣas. Mi ara talseḍ asenker n BleachBit, iɣewwaṛen ad uɣalen "
+"ɣer wazalen n lexṣas."
+
+#. TRANSLATORS: This message appears in a dialog window when the user
+#. asks the user to confirm deleting files when a preview was run.
+#: ../bleachbit/GuiBasic.py
+msgid ""
+"Are you sure you want to permanently delete files according to the selected "
+"operations?  The actual files that will be deleted may have changed since "
+"you ran the preview."
+msgstr ""
+"Tebɣiḍ s tidet ad tekkseḍ ifuyla i lebda ilmend n temhalin yettwafernen? "
+"Ifuyla ara yettwakksen s tidet zemren ad illin beddlen seg wasmi i tesnekreḍ "
+"taskant."
+
+#. TRANSLATORS: This message appears in a dialog window when the user
+#. asks the user to confirm deleting files when no preview was run.
+#: ../bleachbit/GuiBasic.py
+msgid "Are you sure you want to permanently delete these files?"
+msgstr "Tebɣiḍ s tidet ad tekkseḍ ifuyla-a i lebda?"
+
+#. TRANSLATORS: Check button shown in the confirm delete dialog.
+#. If unchecked, then it will not confirm next time.
+#. TRANSLATORS: Checkbox label in the preferences dialog.
+#. Ask for confirmation before deleting items.
+#: ../bleachbit/GuiBasic.py ../bleachbit/GuiPreferences.py
+msgid "Confirm before delete"
+msgstr "Ssuter asentem uqbel tukksa"
+
+#. TRANSLATORS: Title of a warning dialog. %(option)s is the name
+#. of the option being enabled (e.g. "shred files").
+#: ../bleachbit/GuiBasic.py
+#, python-format
+msgid "Enable %(option)s"
+msgstr "Rmed %(option)s"
+
+#. TRANSLATORS: Check button label. %(option)s is the name of
+#. the option being enabled (e.g. "shred files").
+#: ../bleachbit/GuiBasic.py
+#, python-format
+msgid "Remember my choice for %(option)s"
+msgstr "Ḥrez afran-iw i %(option)s"
+
+#. TRANSLATORS: Button label in a warning dialog to confirm enabling an option.
+#. The underscore is the accelerator key.
+#: ../bleachbit/GuiBasic.py
+msgid "_Enable anyway"
+msgstr "_Rmed ɣas akken"
+
+#. TRANSLATORS: This is an error message shown to root users.
+#. %s expands to a web URL.
+#: ../bleachbit/GuiBasic.py
+#, python-format
+msgid ""
+"Because you are running as root, please manually open this link in a web "
+"browser:\n"
+"%s"
+msgstr ""
+"Acku teslekmeḍ BleachBit s umiḍan root, ldi aseɣwen-a s ufus deg yiminig "
+"Web:\n"
+"%s"
+
+#. TRANSLATORS: The question appears in a confirmation dialog.
+#. %s expands to www.bleachbit.org or similar
+#: ../bleachbit/GuiBasic.py
+#, python-format
+msgid "Open web browser to %s?"
+msgstr "Tebɣiḍ ad teldiḍ tansa %s deg yiminig Web?"
+
+#. TRANSLATORS: Title of a confirmation dialog.
+#. TRANSLATORS: Title of confirmation dialog for deleting orphaned wipe files.
+#. TRANSLATORS: Title of confirmation dialog for repairing folder permissions.
+#: ../bleachbit/GuiBasic.py ../bleachbit/GuiWindow.py
+msgid "Confirm"
+msgstr "Serggeg"
+
+#. TRANSLATORS: Option in combo box to choose to stop after a number
+#. of files have been generated.
+#: ../bleachbit/GuiChaff.py
+msgid "Number of files"
+msgstr "Amḍan n yifuyla"
+
+#. TRANSLATORS: Option in a combo box for choosing the stop condition
+#. when generating chaff (dummy) files. This option means "stop after
+#. the total size of generated files reaches a threshold in megabytes."
+#. "MB" is the megabyte unit abbreviation. Localize it if your language
+#. has an official abbreviation (e.g., "Mo" in French); otherwise keep
+#. "MB".
+#: ../bleachbit/GuiChaff.py
+msgid "Size (MB)"
+msgstr "Tiddi (MB)"
+
+#. TRANSLATORS: Option in combo box to choose to stop when free space
+#. reaches a certain percentage.
+#. The percentage symbol (%) is a literal character, not a format
+#. placeholder.
+#: ../bleachbit/GuiChaff.py
+msgid "Free space (%)"
+msgstr "Tallunt tilellit deg uḍebsi (%)"
+
+#. TRANSLATORS: Used for (1) label for folder chooser button and
+#. (2) error message shown in the infobar when the folder has not
+#. been set. 'Select' is a verb.
+#: ../bleachbit/GuiChaff.py
+msgid "Select destination folder"
+msgstr "Fren akaram n tɣerwaḍt"
+
+#. TRANSLATORS: Error message shown when chaff file generation fails.
+#. The placeholder is for the technical error details.
+#: ../bleachbit/GuiChaff.py
+#, python-brace-format
+msgid "Error generating chaff: {error}"
+msgstr "Tuccḍa deg usnulfu n yisefka isugnanen: {error}"
+
+#. TRANSLATORS: Progress message shown while deleting chaff files.
+#. 'Deleting files' is a present participle.
+#. To indicate an ongoing operation, include the ellipsis as literal
+#. Unicode (…) or as Unicode escape (\u2026).
+#: ../bleachbit/GuiChaff.py
+msgid "Deleting files…"
+msgstr "Tukksa n yifuyla…"
+
+#. TRANSLATORS: Error message shown when deleting chaff files fails.
+#. The placeholder is for the technical error details.
+#: ../bleachbit/GuiChaff.py
+#, python-brace-format
+msgid "Error deleting chaff files: {error}"
+msgstr "Tuccḍa deg tukksa n yifuyla isugnanen: {error}"
+
+#. TRANSLATORS: Title for dialog window.
+#. Digital chaff is like physical chaff that airplanes use to protect themselves
+#. from radar-guided missiles. For more explanation, see the online documentation.
+#: ../bleachbit/GuiChaff.py
+msgid "Make chaff"
+msgstr "Snulfu-d isefka isugnanen"
+
+#. TRANSLATORS: Label at the top of the chaff dialog
+#: ../bleachbit/GuiChaff.py
+msgid "Make randomly-generated messages inspired by documents."
+msgstr "Snulfu-d iznan s wudem agacuran, s useqdec n yisemliyen am iɣbula."
+
+#. TRANSLATORS: Label for the inspiration combo box.
+#. 'Inspiration' is a choice of documents from which random text will be generated.
+#: ../bleachbit/GuiChaff.py
+msgid "Inspiration"
+msgstr "Tahregt"
+
+#: ../bleachbit/GuiChaff.py
+msgid "2600 Magazine"
+msgstr "Tasɣunt 2600"
+
+#: ../bleachbit/GuiChaff.py
+msgid "Hillary Clinton's emails"
+msgstr "Imaylen n Hillary Clinton"
+
+#. TRANSLATORS: Label for the combo box that selects when to stop
+#. generating chaff files.
+#: ../bleachbit/GuiChaff.py
+msgid "Stop after"
+msgstr "Ḥbes seld"
+
+#. TRANSLATORS: Label for the combo box that selects what to do
+#. when chaff generation is finished.
+#: ../bleachbit/GuiChaff.py
+msgid "When finished"
+msgstr "Mi ara ifak"
+
+#. TRANSLATORS: Option in combo box to delete generated chaff
+#. files without shredding them.
+#: ../bleachbit/GuiChaff.py
+msgid "Delete without shredding"
+msgstr "Kkes war asenger"
+
+#. TRANSLATORS: Option in combo box to keep generated chaff files.
+#: ../bleachbit/GuiChaff.py
+msgid "Do not delete"
+msgstr "Ur tekkes ara"
+
+#. TRANSLATORS: This is a label in a dialog shown when the user
+#. clicks the button to download models for chaff generation.
+#. 'Downloading' is a present participle.
+#. 'Inspiration content' refers to source documents from which
+#. random text will be generated.
+#. To indicate an ongoing operation, include the ellipsis as literal
+#. Unicode (…) or as Unicode escape (\u2026).
+#: ../bleachbit/GuiChaff.py
+msgid "Downloading inspiration content…"
+msgstr "Asider n ugbur n tehregt…"
+
+#. TRANSLATORS: Button label in a dialog window to start making
+#. chaff files.
+#: ../bleachbit/GuiChaff.py
+msgid "Make files"
+msgstr "Snulfu-d ifuyla"
+
+#. TRANSLATORS: Error message shown when downloading
+#. chaff models failed.
+#: ../bleachbit/GuiChaff.py
+msgid "Download failed"
+msgstr "Asider ur yeddi ara"
+
+#. TRANSLATORS: Notification shown in an infobar when
+#. chaff file generation is aborted by the user.
+#: ../bleachbit/GuiChaff.py
+msgid "Chaff generation aborted"
+msgstr "Asnulfu n yisefka isugnanen yettwaḥbes"
+
+#. TRANSLATORS: Notification shown in an infobar when chaff file generation
+#. is complete.
+#: ../bleachbit/GuiChaff.py
+msgid "Chaff generation complete"
+msgstr "Asnulfu n yisefka isugnanen ifukk"
+
+#. TRANSLATORS: Progress message shown while generating chaff files.
+#. 'Generating' is a present participle.
+#. To indicate an ongoing operation, include the ellipsis as literal
+#. Unicode (…) or as Unicode escape (\u2026).
+#: ../bleachbit/GuiChaff.py
+msgid "Generating files…"
+msgstr "Asnulfu n yifuyla…"
+
+#. TRANSLATORS: Instruction label in the manage cookies dialog.
+#: ../bleachbit/GuiCookie.py
+msgid "Select the cookies to keep when cleaning cookies across browsers."
+msgstr ""
+"Fren inagan n tuqqna ara teǧǧeḍ mi ara tesfdeḍ inagan n tuqqna deg yiminigen "
+"Web."
+
+#. TRANSLATORS: This is a notice in the cookie manager about supported
+#. cookie types. The hyperlink points to the documentation website.
+#. Cookies refer to standard HTTP cookies.
+#. Site data includes LocalStorage, IndexedDB, and other website storage.
+#: ../bleachbit/GuiCookie.py
+#, python-brace-format
+msgid ""
+"Only cookies are preserved. Site data is always deleted. <a "
+"href='{url}'>Learn more</a>"
+msgstr ""
+"Inagan n tuqqna kan i yettwaḥerzen. Isefka n usmel ad ttwakksen yal tikkelt. "
+"<a href='{url}'>Lmed ugar</a>"
+
+#. TRANSLATORS: Label for the search entry in the manage cookies dialog.
+#: ../bleachbit/GuiCookie.py
+msgid "Search:"
+msgstr "Anadi:"
+
+#. TRANSLATORS: Placeholder text in the search entry in the manage cookies dialog.
+#. 'Filter' is a verb meaning to narrow down the list by typing.
+#: ../bleachbit/GuiCookie.py
+msgid "Filter cookies..."
+msgstr "Sti inagan n tuqqna..."
+
+#. TRANSLATORS: Toggle button label in the manage cookies dialog.
+#. "Show" is a command (imperative).
+#. 'Selected' refers to selected cookies (the noun "cookies" is implied).
+#: ../bleachbit/GuiCookie.py
+msgid "Show Selected"
+msgstr "Sken-d wid yettwafernen"
+
+#. TRANSLATORS: Tooltip for the "Show Selected" toggle button.
+#: ../bleachbit/GuiCookie.py
+msgid "Only show cookies that are currently selected"
+msgstr "Sken-d kan inagan n tuqqna i yettwafernen tura"
+
+#. TRANSLATORS: Column header in the manage cookies dialog.
+#. 'Host' is a noun meaning the website hostname (domain name) of the cookie.
+#: ../bleachbit/GuiCookie.py
+msgid "Host"
+msgstr "Asenneftaɣ"
+
+#. TRANSLATORS: Button label in the manage cookies dialog.
+#: ../bleachbit/GuiCookie.py
+msgid "Select All"
+msgstr "Fren meṛṛa"
+
+#. TRANSLATORS: Button label in the manage cookies dialog.
+#: ../bleachbit/GuiCookie.py
+msgid "Deselect All"
+msgstr "Kkes afran i meṛṛa"
+
+#. TRANSLATORS: Status message shown while the cookie list is loading
+#. in the cookie manager dialog window.
+#. "Loading" is a present participle (ongoing action).
+#. To indicate an ongoing operation, include the ellipsis as literal
+#. Unicode (…) or as Unicode escape (\u2026).
+#: ../bleachbit/GuiCookie.py
+msgid "Loading cookies…"
+msgstr "Asali n yinagan n tuqqna…"
+
+#: ../bleachbit/GuiPreferences.py
+msgid ""
+"Expert mode enables advanced features and relaxes guardrails. Use extra "
+"caution in expert mode."
+msgstr ""
+"Askar n umazzay yessermad tiwura tinaẓiyin yerna yesifsus ilugan n tɣellist. "
+"Ɣur-k·m aṭas mi ara tesqedceḍ askar-a."
+
+#. TRANSLATORS: Used both as (1) a checkbox label in the preferences dialog
+#. to bypass some safety guardails for advanced users and (2) the title of
+#. dialog asking to confirm this choice.
+#: ../bleachbit/GuiPreferences.py
+msgid "Expert mode"
+msgstr "Askar n umazzay"
+
+#. TRANSLATORS: Notice shown in an infobar after changing a preference
+#. that requires starting the application to be effective.
+#: ../bleachbit/GuiPreferences.py
+msgid "Restart BleachBit for full effect."
+msgstr "Ales asenker n BleachBit akken ad yettwasnes usenfel s lekmal-is."
+
+#. TRANSLATORS: Title for the preferences dialog
+#. TRANSLATORS: This menu item opens a dialog where the user can
+#. configure application settings.
+#: ../bleachbit/GuiPreferences.py ../share/app-menu.ui
+msgid "Preferences"
+msgstr "Ismenyifen"
+
+#. TRANSLATORS: Sidebar label for the general settings page of the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "General"
+msgstr "Amatu"
+
+#. TRANSLATORS: Sidebar label for the software updates page of the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Updates"
+msgstr "Imucceḍen"
+
+#. TRANSLATORS: Sidebar label for the "Languages" page in the Preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Languages"
+msgstr "Tutlayin"
+
+#. TRANSLATORS: Sidebar label for the "keep list" (whitelist) page of
+#. the preferences dialog. This page lists paths that will be preserved
+#. (not deleted) during cleaning.
+#: ../bleachbit/GuiPreferences.py
+msgid "Keep list"
+msgstr "Tabdart n wayen ara teǧǧeḍ"
+
+#. TRANSLATORS: Sidebar label for the drives page of the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Drives"
+msgstr "Iḍebsiyen"
+
+#. TRANSLATORS: Notice shown in an infobar when toggling
+#. dark mode on Linux.
+#: ../bleachbit/GuiPreferences.py
+msgid "Some GTK themes do not support both light and dark modes."
+msgstr ""
+"Kra n yisentalen GTK ur zmiren ara ad ddun deg sin n yiskaren: askar aceɛlal "
+"d uskar ubrik."
+
+#. TRANSLATORS: Success message shown in the infobar.
+#: ../bleachbit/GuiPreferences.py
+msgid "Warning confirmations reset."
+msgstr "Isentamen n yilɣuten uɣalen ɣer waddad n lexṣas."
+
+#. TRANSLATORS: Checkbox label in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Check periodically for software updates via the Internet"
+msgstr "Senqed s wudem awalan ɣef Internet ma llan yimucceḍen n useɣẓan"
+
+#. TRANSLATORS: Tooltip for the online updates checkbox in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid ""
+"If an update is found, you will be given the option to view information "
+"about it.  Then, you may manually download and install the update."
+msgstr ""
+"Ma yettwaf-d umucceḍ, ad tizmireḍ ad twaliḍ tilɣa fell-as. Syin, tzemreḍ ad "
+"t-id-tsidreḍ u ad t-tesbeddeḍ s ufus."
+
+#. TRANSLATORS: Checkbox label in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Check for new beta releases"
+msgstr "Senqed ma llan yileqman beta imaynuten"
+
+#. TRANSLATORS: Checkbox label in the preferences dialog.
+#. Winapp2.ini is a set of cleaning rules from this project:
+#. https://github.com/MoscaDotTo/Winapp2
+#: ../bleachbit/GuiPreferences.py
+msgid "Download and update cleaners from community (winapp2.ini)"
+msgstr "Sider u mucceḍ ifecka n usfaḍ n umɣiwan (winapp2.ini)"
+
+#. TRANSLATORS: Checkbutton label in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Auto-detect language"
+msgstr "Af tutlayt s wudem awurman"
+
+#. TRANSLATORS: Tooltip explaining the auto-detect language option.
+#: ../bleachbit/GuiPreferences.py
+msgid "Automatically detect the system language"
+msgstr "Af tutlayt n unagraw s wudem awurman"
+
+#. TRANSLATORS: Label for the language selection dropdown.
+#: ../bleachbit/GuiPreferences.py
+msgid "Language:"
+msgstr "Tutlayt:"
+
+#. TRANSLATORS: Checkbox label in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Overwrite contents of files to prevent recovery"
+msgstr "Ales tira ɣef ugbur n yifuyla akken ur d-ttwarran ara"
+
+#. TRANSLATORS: Tooltip for the shred checkbox in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid ""
+"Overwriting is ineffective on some file systems and with certain BleachBit "
+"operations.  Overwriting is significantly slower."
+msgstr ""
+"Allus n tira ur d-yettak ara igmaḍ i yettwarǧan ɣef kra n yinagrawen n "
+"yifuyla u deg kra n temhalin n BleachBit. Yerna yesra aṭas n wakud ugar."
+
+#. TRANSLATORS: Checkbox label in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Exit after cleaning"
+msgstr "Ffeɣ seld asfaḍ"
+
+#. TRANSLATORS: Button label in the preferences. 'Reset' is a verb.
+#: ../bleachbit/GuiPreferences.py
+msgid "Reset warning confirmations"
+msgstr "Err isentamen n yilɣuten ɣer waddad n lexṣas"
+
+#. TRANSLATORS: This means to hide cleaners which would do
+#. nothing. For example, if Firefox were never used on
+#. this system, this option would hide Firefox to simplify
+#. the list of cleaners.
+#: ../bleachbit/GuiPreferences.py
+msgid "Hide irrelevant cleaners"
+msgstr "Ffer ifecka n usfaḍ ur nesɛi ara d acu ara sfeḍen"
+
+#. TRANSLATORS: Checkbox label in the preferences.
+#: ../bleachbit/GuiPreferences.py
+msgid "Use IEC sizes (1 KiB = 1024 bytes) instead of SI (1 kB = 1000 bytes)"
+msgstr ""
+"Seqdec tayunin IEC (1 KiB = 1024 itamḍanen) deg umḍiq n tayunin SI (1 kB = "
+"1000 itamḍanen)"
+
+#. TRANSLATORS: Section title on the preferences updates page.
+#: ../bleachbit/GuiPreferences.py
+msgid "Update notifications"
+msgstr "Ilɣuten n yimucceḍen"
+
+#. TRANSLATORS: Section title (noun) on the Preferences - General page
+#. for options related to cleaning stored data.
+#: ../bleachbit/GuiPreferences.py
+msgid "Cleaning"
+msgstr "Asfaḍ"
+
+#. TRANSLATORS: Section title in Preferences for user interface options
+#. such as dark mode and window behavior.
+#: ../bleachbit/GuiPreferences.py
+msgid "Interface"
+msgstr "Agrudem"
+
+#. TRANSLATORS: Checkbox label to remember the window size and position
+#. between application launches.
+#: ../bleachbit/GuiPreferences.py
+msgid "Remember window geometry"
+msgstr "Ḥrez tiddi n usfaylu d wadig-is"
+
+#. TRANSLATORS: Checkbox label to enable dark mode in the UI.
+#: ../bleachbit/GuiPreferences.py
+msgid "Dark mode"
+msgstr "Askar ubrik"
+
+#. TRANSLATORS: Checkbox label to use the Windows 10-style visual theme
+#. for the application interface.
+#: ../bleachbit/GuiPreferences.py
+msgid "Windows 10 theme"
+msgstr "Asentel n Windows 10"
+
+#. TRANSLATORS: Checkbox label to use the Fontconfig text rendering backend
+#. instead of the default Windows renderer. The option may improve blurry text.
+#. Fontconfig, which is software, is a proper noun.
+#: ../bleachbit/GuiPreferences.py
+msgid "Use Fontconfig text rendering backend"
+msgstr "Seqdec Fontconfig d amsadday n uskan n uḍris"
+
+#. TRANSLATORS: Tooltip for the fontconfig text rendering checkbox in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "May fix blurry or unreadable text. Requires restart."
+msgstr ""
+"Tezmer ad tseɣti aḍris ur iban ara akken iwata neɣ ur nettwaɣra ara. Ilaq ad "
+"talseḍ asenker n BleachBit."
+
+#. TRANSLATORS: Section title on the preferences general page,
+#. labelling options for OS integration and advanced/developer features.
+#: ../bleachbit/GuiPreferences.py
+msgid "Integration and advanced"
+msgstr "Aseddu d yiɣewwaṛen inaẓiyen"
+
+#. TRANSLATORS: Checkbox label in the preferences dialog.
+#. 'Shred' means securely delete a file to prevent data recovery.
+#. 'Context menu' is the menu shown on right-click.
+#. 'KDE Plasma' is a Linux desktop environment (proper noun, do not translate).
+#: ../bleachbit/GuiPreferences.py
+msgid "Add the shred context menu to KDE Plasma"
+msgstr "Rnu umuɣ asatalan n usenger ɣer KDE Plasma"
+
+#. TRANSLATORS: Checkbox label to show diagnostic log messages for
+#. troubleshooting.
+#: ../bleachbit/GuiPreferences.py
+msgid "Show debug messages"
+msgstr "Sken-d iznan n useɣti"
+
+#. TRANSLATORS: 'empty' means 'unallocated'.
+#. The user should decide which drives to wipe. Then, for each
+#. chosen drive, the user should specify one folder per drive.
+#. For example, to wipe C:\, the user may choose %TEMP% which
+#. is a folder anywhere on C:.
+#: ../bleachbit/GuiPreferences.py
+msgid "Choose a writable folder for each drive for which to wipe empty space."
+msgstr ""
+"Fren akaram i deg yezmer BleachBit ad yaru, i yal aḍebsi i deg tebɣiḍ ad "
+"tesfḍeḍ tallunt tilemt."
+
+#. TRANSLATORS: In the preferences dialog, this button adds a path to
+#. the list of paths
+#: ../bleachbit/GuiPreferences.py
+msgctxt "button"
+msgid "Add"
+msgstr "Rnu"
+
+#. TRANSLATORS: In the preferences dialog, this button removes a path
+#. from the list of paths
+#: ../bleachbit/GuiPreferences.py
+msgctxt "button"
+msgid "Remove"
+msgstr "Kkes"
+
+#. TRANSLATORS: Section title on the preferences languages page.
+#: ../bleachbit/GuiPreferences.py
+msgid "BleachBit interface language"
+msgstr "Tutlayt n ugrudem n BleachBit"
+
+#. TRANSLATORS: Section title on the preferences languages page.
+#: ../bleachbit/GuiPreferences.py
+msgid "Language files to keep when cleaning applications"
+msgstr "Ifuyla n tutlayin ara teǧǧeḍ mi ara tesfḍeḍ isnasen"
+
+#. TRANSLATORS: Column header in the languages treeview.
+#. This column controls whether to keep the language.
+#: ../bleachbit/GuiPreferences.py
+msgid "Keep"
+msgstr "Eǧǧ"
+
+#. TRANSLATORS: Column header in the languages treeview showing the
+#. language code (e.g., 'en_US').
+#: ../bleachbit/GuiPreferences.py
+msgid "Code"
+msgstr "Angal"
+
+#. TRANSLATORS: Column header in the languages treeview showing the
+#. native name of the language.
+#. TRANSLATORS: Column header for the cleaner name.
+#. Used in the tree view on the main screen.
+#. 'Name' is a noun.
+#: ../bleachbit/GuiPreferences.py ../bleachbit/GuiTreeModels.py
+msgid "Name"
+msgstr "Isem"
+
+#. TRANSLATORS: Error message shown in the infobar.
+#: ../bleachbit/GuiPreferences.py
+msgid "This path already exists in the keep list."
+msgstr "Abrid-a yella yakan deg tebdart n wayen ara teǧǧeḍ."
+
+#. TRANSLATORS: Error message shown in the infobar.
+#: ../bleachbit/GuiPreferences.py
+msgid "This path already exists in the custom list."
+msgstr "Abrid-a yella yakan deg tebdart tudmawant."
+
+#. TRANSLATORS: Error message shown in the infobar.
+#: ../bleachbit/GuiPreferences.py
+msgid "This path is protected. To bypass protection, enable expert mode."
+msgstr "Abrid-a yettwaḥrez. Akken ad tzegleḍ aḥraz-a, rmed askar n umazzay."
+
+#. TRANSLATORS: Title of warning dialog shown when adding a protected path.
+#: ../bleachbit/GuiPreferences.py
+msgid "Protected Path"
+msgstr "Abrid ugdil"
+
+#. TRANSLATORS: Noun used as a column header in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "File"
+msgstr "Afaylu"
+
+#. TRANSLATORS: Noun used as a column header in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Folder"
+msgstr "Akaram"
+
+#. TRANSLATORS: %s is a file or folder path that was just added
+#: ../bleachbit/GuiPreferences.py
+#, python-format
+msgid "Added: %s"
+msgstr "Yettwarna: %s"
+
+#. TRANSLATORS: %s is a file or folder path that was just removed
+#: ../bleachbit/GuiPreferences.py
+#, python-format
+msgid "Removed: %s"
+msgstr "Yettwakkes: %s"
+
+#. TRANSLATORS: Notice label at the top of the keeplist (whitelist)
+#. page in the preferences dialog.
+#. "Paths" is used generically to refer to both files and folders.
+#: ../bleachbit/GuiPreferences.py
+msgid "These paths will not be deleted or modified."
+msgstr "Iberdan-a ad qqimen akken llan: ur ttwabeddlen ara, ur ttwakksen ara."
+
+#. TRANSLATORS: Notice label at the top of the custom (delete)
+#. page in the preferences dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "These locations can be selected for deletion."
+msgstr "Tzemreḍ ad tferneḍ idigan-a i tukksa."
+
+#. TRANSLATORS: Column header in the preferences dialog showing whether
+#. the item is a file or folder.
+#: ../bleachbit/GuiPreferences.py
+msgid "Type"
+msgstr "Anaw"
+
+#. TRANSLATORS: In the tree view "Path" is used generically to refer to a
+#. file, a folder, or a pattern describing either
+#: ../bleachbit/GuiPreferences.py
+msgid "Path"
+msgstr "Abrid"
+
+#. TRANSLATORS: Title of a file chooser dialog.
+#: ../bleachbit/GuiPreferences.py
+msgid "Choose a file"
+msgstr "Fren afaylu"
+
+#. TRANSLATORS: Button label in the preferences for adding a file.
+#: ../bleachbit/GuiPreferences.py
+msgctxt "button"
+msgid "Add file"
+msgstr "Rnu afaylu"
+
+#. TRANSLATORS: Button label in the preferences for adding a folder.
+#: ../bleachbit/GuiPreferences.py
+msgctxt "button"
+msgid "Add folder"
+msgstr "Rnu akaram"
+
+#. TRANSLATORS: "Expert Mode" is the name of a feature/setting found in
+#. Preferences. Keep it consistent with the translation of "Expert Mode"
+#. in the preferences dialog. This message appears when cleaning options
+#. with warnings are selected but expert mode is disabled.
+#: ../bleachbit/GuiStartup.py
+msgid ""
+"One or more selected cleaning options have warnings and require Expert Mode "
+"to clean. Enable it in preferences."
+msgstr ""
+"Llan yilɣuten i yiwet neɣ ugar seg tixtiṛiyin n usfaḍ i tferneḍ. Asfaḍ s "
+"tixtiṛiyin-a yesra askar n umazzay. Rmed-it deg yismenyifen."
+
+#. TRANSLATORS: "Expert Mode" is the name of a feature/setting found in
+#. Preferences. Keep it consistent with the translation of "Expert Mode"
+#. in the preferences dialog. This message appears when the user tries to
+#. skip a delete confirmation without enabling Expert Mode.
+#: ../bleachbit/GuiStartup.py
+msgid ""
+"Delete confirmation is disabled but expert mode is not enabled. Enable "
+"Expert Mode in preferences to skip delete confirmations."
+msgstr ""
+"Asentem n tukksa yettwasexsi, maca askar n umazzay ur yermid ara. Rmed askar "
+"n umazzay deg yismenyifen akken ad tzegleḍ isentamen n tukksa."
+
+#. TRANSLATORS: First-start hint for Linux users shown in
+#. the log on the main screen.
+#: ../bleachbit/GuiStartup.py
+msgid ""
+"Access the application menu by clicking the hamburger icon on the title bar."
+msgstr ""
+"Sit ɣef tignit « hamburger » (☰) deg tfeggagt n uzwel akken ad teldiḍ umuɣ "
+"n usnas."
+
+#. TRANSLATORS: First-start hint for Windows users shown in
+#. the log on the main screen.
+#: ../bleachbit/GuiStartup.py
+msgid "Access the application menu by clicking the logo on the title bar."
+msgstr "Sit ɣef ulugu deg tfeggagt n uzwel akken ad teldiḍ umuɣ n usnas."
+
+#. TRANSLATORS: Warning shown on startup when running BleachBit as root on Linux.
+#. It means, for example, that cleaning a browser will clean root's browser data.
+#: ../bleachbit/GuiStartup.py
+msgid ""
+"You are running BleachBit with administrative privileges for cleaning shared "
+"parts of the system, and references to the user profile folder will clean "
+"only the root account."
+msgstr ""
+"Teslekmeḍ BleachBit s tseglut n unedbal akken ad tesfḍeḍ iḥricen n unagraw i "
+"cerken yiseqdacen. Ma yella ubrid yettawi ɣer ukaram n umaɣnu n useqdac, "
+"BleachBit ad yesfeḍ kan amiḍan root."
+
+#. TRANSLATORS: Warning shown on startup on Windows.
+#: ../bleachbit/GuiStartup.py
+msgid ""
+"Run BleachBit with administrator privileges to improve the accuracy of "
+"overwriting the contents of files."
+msgstr ""
+"Selkem BleachBit s tseglut n unedbal akken ad tesnerniḍ tiseddi n wallus n "
+"tira ɣef ugbur n yifuyla."
+
+#. TRANSLATORS: Warning shown on startup on Windows when elevated
+#. with different account. It means, for example, that cleaning a
+#. browser will clean the browser data of the administrator account.
+#: ../bleachbit/GuiStartup.py
+msgid ""
+"You elevated privileges using a different account to clean shared parts of "
+"the system. User-specific paths will refer to the administrator account, so "
+"to clean your profile, run BleachBit again as a standard user."
+msgstr ""
+"Tessuliḍ taseglut s useqdec n umiḍan-nniḍen akken ad tesfḍeḍ iḥricen n "
+"unagraw i cerken yiseqdacen. Iberdan usligen i useqdac ad awin ɣer umiḍan n "
+"unedbal. Ihi, akken ad tesfḍeḍ amaɣnu-ik·im, ales aselkem n BleachBit s "
+"umiḍan n useqdac amagnu."
+
+#. TRANSLATORS: Warning shown on startup on Windows when running
+#. unofficial Microsoft Store version. Advises user to get genuine
+#. version from official website.
+#: ../bleachbit/GuiStartup.py
+msgid ""
+"There is no official version of BleachBit on the Microsoft Store. Get the "
+"genuine version at https://www.bleachbit.org where it is always free of "
+"charge."
+msgstr ""
+"Ulac lqem unṣib n BleachBit deg Microsoft Store. Awi-d lqem aneṣli seg "
+"https://www.bleachbit.org, anda i tzemreḍ ad t-id-tsidreḍ yal tikkelt war "
+"lexlaṣ."
+
+#. TRANSLATORS: Startup warning on macOS when the application
+#. lacks Full Disk Access. "Full Disk Access", "System
+#. Settings", and "Privacy & Security" are names of macOS
+#. features and settings: match Apple's localization.
+#: ../bleachbit/GuiStartup.py
+msgid ""
+"BleachBit may not have Full Disk Access. Without it, macOS blocks access to "
+"some files, and some cleaners will not work.\n"
+"\n"
+"To fix this, open System Settings > Privacy & Security > Full Disk Access, "
+"turn on BleachBit, and then restart BleachBit."
+msgstr ""
+"Ahat BleachBit ur yesɛi ara adduf ummid ɣer uḍebsi. War adduf-a, macOS "
+"yessewḥal adduf ɣer kra n yifuyla, yerna kra n yifecka n usfaḍ ur tteddun "
+"ara.\n"
+"\n"
+"Akken ad tseɣtiḍ ugur-a, ldi Iɣewwaṛen n unagraw > Tabaḍnit d tɣellist > "
+"Adduf ummid ɣer uḍebsi, rmed BleachBit, sakin ales asenker-is."
+
+#. TRANSLATORS: Column header indicating whether the cleaner is active/enabled.
+#. Used in the tree view on the main screen.
+#: ../bleachbit/GuiTreeModels.py
+msgid "Active"
+msgstr "Urmid"
+
+#. TRANSLATORS: Column header for the size of the cleaner.
+#. Used in the tree view on the main screen.
+#. 'Size' is a noun and refers to the amount of space that the cleaner
+#. would clean (preview mode) or did clean (cleaning mode).
+#: ../bleachbit/GuiTreeModels.py
+msgid "Size"
+msgstr "Tiddi"
+
+#. TRANSLATORS: Warning shown in the infobar.
+#: ../bleachbit/GuiTreeModels.py
+msgid "This option is protected. To bypass protection, enable expert mode."
+msgstr "Taxtiṛit-a d tugdilt. Akken ad tzegleḍ asegdel-a, rmed askar n umazzay."
+
+#. TRANSLATORS: %(cleaner) may be Firefox, System, etc.
+#. %(option) may be cache, logs, cookies, etc.
+#: ../bleachbit/GuiTreeModels.py
+#, python-format
+msgid "%(cleaner)s - %(option)s"
+msgstr "%(cleaner)s - %(option)s"
+
+#. TRANSLATORS: Error message shown in the log on the main window.
+#. %s is the file path.
+#: ../bleachbit/GuiWindow.py
+#, python-format
+msgid "Resetting the configuration file because it is corrupt: %s"
+msgstr "Tiririt n ufaylu n twila ɣer waddad n lexṣas acku yexṣer: %s"
+
+#. TRANSLATORS: Error message shown in the infobar when the user
+#. starts an operation while another one is running.
+#: ../bleachbit/GuiWindow.py
+msgid "Wait for the current operation to finish."
+msgstr "Rǧu alamma tfukk temhelt tamirant."
+
+#. TRANSLATORS: Error message shown when a cleaner option
+#. cannot be used because expert mode is disabled.
+#. %(cleaner)s is the cleaner name, %(option)s is the option name.
+#: ../bleachbit/GuiWindow.py
+#, python-format
+msgid ""
+"%(cleaner)s - %(option)s cannot be cleaned because expert mode is disabled."
+msgstr ""
+"%(cleaner)s - %(option)s: d awezɣi asfaḍ acku askar n umazzay yettwasexsi."
+
+#. TRANSLATORS: Error message shown in the infobar when the user clicks
+#. the preview or clean button without selecting any cleaner options.
+#: ../bleachbit/GuiWindow.py
+msgid "You must select an operation"
+msgstr "Ilaq ad tferneḍ tamhelt"
+
+#. TRANSLATORS: Status message shown on the progress bar and in a popup
+#. notification.
+#: ../bleachbit/GuiWindow.py
+msgid "Done."
+msgstr "Ifukk."
+
+#. TRANSLATORS: Button label on the headerbar and context menu item
+#. in the treeview.
+#. 'Preview' is a verb.
+#: ../bleachbit/GuiWindow.py
+msgid "Preview"
+msgstr "Sken-d taskant"
+
+#. TRANSLATORS: Button label on the headerbar and context menu item
+#. in the treeview.
+#. 'Clean' is a verb.
+#: ../bleachbit/GuiWindow.py
+msgid "Clean"
+msgstr "Sfeḍ"
+
+#. TRANSLATORS: Button in tree view's context menu to open the cookie
+#. manager.
+#. Preserve the ellipsis as literal Unicode (…) or as Unicode escape (\u2026).
+#: ../bleachbit/GuiWindow.py
+msgid "Manage cookies to keep…"
+msgstr "Sefrek inagan n tuqqna ara teǧǧeḍ…"
+
+#. TRANSLATORS: Context menu item in the tree view that opens the preferences dialog.
+#. Preserve the ellipsis as literal Unicode (…) or as Unicode escape (\u2026).
+#: ../bleachbit/GuiWindow.py
+msgid "Manage custom paths…"
+msgstr "Sefrek iberdan udmawanen…"
+
+#. TRANSLATORS: Tooltip for the preview button on the headerbar.
+#. 'Preview' is a verb, and 'selected operations' refers to
+#. the cleaning options (e.g., Firefox - Cache).
+#: ../bleachbit/GuiWindow.py
+msgid "Preview files in the selected operations (without deleting any files)"
+msgstr ""
+"Sken-d taskant n yifuyla n temhalin yettwafernen (war ma tekkseḍ ula d yiwen "
+"ufaylu)"
+
+#. TRANSLATORS: Tooltip for the clean button on the headerbar.
+#. 'Clean' is a verb, and 'operations' are cleaning options (e.g.,
+#. Firefox - Cache).
+#: ../bleachbit/GuiWindow.py
+msgid "Clean files in the selected operations"
+msgstr "Sfeḍ ifuyla n temhalin yettwafernen"
+
+#. TRANSLATORS: Tooltip for the abort button on the headerbar,
+#. and 'abort' ia a verb.
+#: ../bleachbit/GuiWindow.py
+msgid "Abort the preview or cleaning process"
+msgstr "Sefsex taskant neɣ akala n usfaḍ"
+
+#. TRANSLATORS: Button in headerbar to update the application.
+#. 'Update' is a verb.
+#: ../bleachbit/GuiWindow.py
+msgid "Update"
+msgstr "Mucceḍ"
+
+#. TRANSLATORS: Tooltip for the update button in the headerbar.
+#. 'Update' is a verb.
+#: ../bleachbit/GuiWindow.py
+msgid "Update BleachBit to the latest version"
+msgstr "Mucceḍ BleachBit ɣer lqem aneggaru"
+
+#. TRANSLATORS: Hint shown when starting in fullscreen mode.
+#: ../bleachbit/GuiWindow.py
+msgid "Press F11 to exit fullscreen mode."
+msgstr "Sit ɣef F11 akken ad teffɣeḍ seg uskar n ugdil aččuran."
+
+#. TRANSLATORS: This message is shown when orphaned temporary files
+#. from an interrupted disk wipe operation are detected.
+#: ../bleachbit/GuiWindow.py
+msgid ""
+"BleachBit detected leftover files from an interrupted disk wipe operation. "
+"Would you like to preview them with an option to delete them?"
+msgstr ""
+"BleachBit yufa-d ifuyla i d-yeqqimen acku tamhelt n usfaḍ n uḍebsi "
+"tettwaḥbes. Tebɣiḍ ad twaliḍ taskant-nsen s taxtiṛit n tukksa-nsen?"
+
+#. TRANSLATORS: This message is shown on Windows when the configuration
+#. folder (%APPDATA%\BleachBit) has broken file permissions that prevent
+#. non-administrator processes from accessing it. %s is the folder path.
+#: ../bleachbit/GuiWindow.py
+#, python-format
+msgid ""
+"BleachBit detected a permissions issue with its configuration folder (%s). "
+"Would you like to repair it?"
+msgstr ""
+"BleachBit yufa-d ugur n tsirag deg ukaram-is n twila (%s). Tebɣiḍ ad t-"
+"tesegmeḍ?"
+
+#. TRANSLATORS: Message shown in the log after repairing
+#. folder permissions. %s is the folder path.
+#: ../bleachbit/GuiWindow.py
+#, python-format
+msgid "Repaired permissions for %s."
+msgstr "Tisirag n %s ttwaseggment."
+
+#. TRANSLATORS: Message shown in the log when repairing
+#. folder permissions did not fully succeed. %s is the
+#. folder path.
+#: ../bleachbit/GuiWindow.py
+#, python-format
+msgid "Could not fully repair permissions for %s."
+msgstr "Tisirag n %s ur ttwaseggment ara s lekmal."
+
+#. TRANSLATORS: Error message shown when checking for updates fails.
+#. %s is the error details.
+#: ../bleachbit/GuiWindow.py
+#, python-format
+msgid "Error when checking for updates: %s"
+msgstr "Tuccḍa deg usenqed n yimucceḍen: %s"
+
+#: ../bleachbit/Memory.py
+msgid ""
+"The command 'swapon -s' failed, so falling back to /proc/swaps for swap "
+"information."
+msgstr ""
+"Taladna 'swapon -s' ur teddi ara; ihi, BleachBit ad d-yawi talɣut ɣef "
+"tallunt n usemselsi seg /proc/swaps."
+
+#: ../bleachbit/Memory.py
+msgid "Disabling swap."
+msgstr "Asensi n tallunt n usemselsi."
+
+#: ../bleachbit/Memory.py
+msgid "Re-enabling swap."
+msgstr "Asermed n tallunt n usemselsi tikelt-nniḍen."
+
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "Setting nice value %d for this process."
+msgstr "Asbadu n wazal nice %d i ukala-a."
+
+#. TRANSLATORS: Debug message when a process gives up root/admin privileges.
+#. %(pid)d is the integer process ID; %(uid)d is the integer user ID to switch to.
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "Dropping privileges of process ID %(pid)d to user ID %(uid)d."
+msgstr ""
+"Asenqes n tseglut n ukala s usulay %(pid)d ɣer tin n useqdac s usulay %(uid)"
+"d."
+
+#. TRANSLATORS: The variable is a quantity like 5kB
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "Allocating and wiping %s of memory."
+msgstr "Aḥeṛṛi d usfaḍ n %s n tkatut."
+
+#. TRANSLATORS: The variable is a quantity like 5kB
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "Freeing %s of memory."
+msgstr "Aslelli n %s n tkatut."
+
+#. TRANSLATORS: This is a debugging message that the parent process
+#. is waiting for the child process. %(parent_pid)d is the parent
+#. process ID; %(child_pid)d is the child process ID.
+#: ../bleachbit/Memory.py
+#, python-format
+msgid ""
+"The function wipe_memory() with process ID %(parent_pid)d is waiting for "
+"child process ID %(child_pid)d."
+msgstr ""
+"Tasɣent wipe_memory() n ukala s usulay %(parent_pid)d tettraǧu akala aqrur s "
+"usulay %(child_pid)d."
+
+#. TRANSLATORS: Debug message. 'Found' is a past tense verb (short for
+#. "Found [that] the UUID for swap device ..."). %(device)s is the device
+#. path (e.g., /dev/sda5); %(uuid)s is a UUID string
+#. (e.g., ee0e85f6-6e5c-42b9-902f-776531938bbf). Do not translate variables.
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "Found UUID for swap device %(device)s is %(uuid)s."
+msgstr "UUID i yettwafen i yibenk n usemselsi %(device)s d %(uuid)s."
+
+#. TRANSLATORS: The variable is a quantity like 5kB
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "Physical free memory is %s."
+msgstr "Azal n tkatut taɣarant tilellit d %s."
+
+#. TRANSLATORS: The variable is a device like /dev/sda2
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "Wiping the swap device %s."
+msgstr "Asfaḍ n yibenk n usemselsi %s."
+
+#. TRANSLATORS: The variable is a device like /dev/sda2
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "Reinitializing the swap device %s."
+msgstr "Awennez n yibenk n usemselsi %s tikelt-nniḍen."
+
+#. TRANSLATORS: The variable is a device like /dev/sda2
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "Detected these swap devices: %s"
+msgstr "Ibenkan-a n usemselsi ttwafen-d: %s"
+
+#: ../bleachbit/Memory.py
+#, python-format
+msgid "The child memory-wiping process returned code %d."
+msgstr "Akala aqrur n usfaḍ n tkatut yerra-d tangalt %d."
+
+#: ../bleachbit/Network.py
+#, python-format
+msgid "Downloading URL failed: %s"
+msgstr "Asider seg tansa URL ur yeddi ara: %s"
+
+#: ../bleachbit/Options.py
+#, python-format
+msgid "Disk was full when writing configuration to file: %s"
+msgstr "Aḍebsi yeččur mi tettwaru twila deg ufaylu: %s"
+
+#: ../bleachbit/Options.py
+#, python-format
+msgid "Permission denied when writing configuration to file: %s"
+msgstr "Tasiregt tettwagi mi tettwaru twila deg ufaylu: %s"
+
+#: ../bleachbit/Options.py
+#, python-format
+msgid "Error checking whether path exists: %s"
+msgstr "Tuccḍa deg usenqed ma yella ubrid: %s"
+
+#. TRANSLATORS: %s is a ISO language code of two or three letters.
+#. "Preserving" means the language's localization files will be
+#. kept and not deleted when cleaning.
+#: ../bleachbit/Options.py
+#, python-format
+msgid "Automatically preserving language %s."
+msgstr "Aḥraz awurman n tutlayt %s."
+
+#: ../bleachbit/Options.py
+msgid "Error when setting the default drives to shred."
+msgstr "Tuccḍa deg usbadu n yiḍebsiyen n lexṣas ara yettwasengren."
+
+#. TRANSLATORS: Warning shown when user tries to add a protected path.
+#. %(path)s is the path, %(files)d is number of files, %(size)s is human-readable size
+#. Do not translate the placeholders.
+#. Adapt quotation marks around the path placeholder to the typographic conventions of
+#. your language.
+#: ../bleachbit/ProtectedPath.py
+#, python-format
+msgid ""
+"Warning: '%(path)s' may contain important files.\n"
+"\n"
+"Impact: %(files)d file(s), %(size)s\n"
+"\n"
+"Are you sure you want to add this path?"
+msgstr ""
+"Ulɣu: '%(path)s' yezmer ad yesɛu ifuyla yesɛan azal.\n"
+"\n"
+"Asemdu: %(files)d n yifuyla, %(size)s\n"
+"\n"
+"Tebɣiḍ s tidet ad ternuḍ abrid-a?"
+
+#. TRANSLATORS: Warning shown when user tries to add a protected path (no files found).
+#. Do not translate the placeholder %(path)s.
+#. Adapt quotation marks around the path placeholder to the typographic conventions of
+#. your language.
+#: ../bleachbit/ProtectedPath.py
+#, python-format
+msgid ""
+"Warning: '%(path)s' may contain important files.\n"
+"\n"
+"Are you sure you want to add this path?"
+msgstr ""
+"Ulɣu: '%(path)s' yezmer ad yesɛu ifuyla yesɛan azal.\n"
+"\n"
+"Tebɣiḍ s tidet ad ternuḍ abrid-a?"
+
+#: ../bleachbit/RecognizeCleanerML.py
+msgid "Security warning"
+msgstr "Ulɣu n tɣellist"
+
+#: ../bleachbit/RecognizeCleanerML.py
+msgid ""
+"These cleaner definitions are new or have changed. Malicious definitions can "
+"damage your system. If you do not trust these changes, delete the files or "
+"quit."
+msgstr ""
+"Tibuda-a n yifecka n usfaḍ d timaynutin neɣ ttwabeddlent. Tibuda i d-"
+"yettwasnulfan s yir iswi zemrent ad d-awint lemḍrra i unagraw-ik·im. Ma ur "
+"tesɛiḍ ara taflest deg yisenfal-a, kkes ifuyla-a neɣ ffeɣ seg wahil."
+
+#: ../bleachbit/RecognizeCleanerML.py
+msgctxt "column_label"
+msgid "Delete"
+msgstr "Kkes"
+
+#: ../bleachbit/RecognizeCleanerML.py
+msgctxt "column_label"
+msgid "Filename"
+msgstr "Isem n ufaylu"
+
+#. TRANSLATORS: Notice shown when the installed version is more than
+#. a year old and a newer version may exist. The application still
+#. works; this only suggests checking for a newer version. Keep the
+#. URL unchanged.
+#: ../bleachbit/SystemInformation.py
+msgid ""
+"This version of BleachBit is more than a year old. We regularly release "
+"improvements and bug fixes. You can check for a newer version at https://"
+"www.bleachbit.org."
+msgstr ""
+"Iɛedda ugar n useggas seg wasmi d-yeffeɣ lqem-a n BleachBit. Nessuffuɣ-d s "
+"wudem awalan isnerniyen d yiseɣtiyen n tuccḍiwin. Tzemreḍ ad tesneqdeḍ ma "
+"yella lqem amaynut ugar deg https://www.bleachbit.org."
+
+#: ../bleachbit/Unix.py
+#, python-format
+msgid "Executable not found: %s"
+msgstr "Amselkam ur yettwaf ara: %s"
+
+#. TRANSLATORS: %s expands to a name such as 'Firefox' or 'System'.
+#: ../bleachbit/Unix.py ../bleachbit/Worker.py
+#, python-format
+msgid ""
+"%s cannot be cleaned because it is currently running.  Close it, and try "
+"again."
+msgstr ""
+"D awezɣi asfaḍ n %s acku mazal-it iteddu. Mdel-it, sakin ɛreḍ tikelt-nniḍen."
+
+#. TRANSLATORS: Status message after a successful winapp2.ini update.
+#: ../bleachbit/Update.py
+msgid "New winapp2.ini was downloaded."
+msgstr "Yettwasider ufaylu winapp2.ini amaynut."
+
+#. TRANSLATORS: Title of the software update dialog.
+#: ../bleachbit/Update.py
+msgid "Update BleachBit"
+msgstr "Mucceḍ BleachBit"
+
+#. TRANSLATORS: Message in the software update dialog.
+#: ../bleachbit/Update.py
+msgid "A new version is available."
+msgstr "Yella lqem amaynut."
+
+#. TRANSLATORS: %s expands to version such as '4.6.0'
+#: ../bleachbit/Update.py
+#, python-format
+msgid "Update to version %s"
+msgstr "Mucceḍ ɣer lqem %s"
+
+#: ../bleachbit/Update.py
+msgid ""
+"Error when opening a network connection to check for updates. Please verify "
+"the network is working and that a firewall is not blocking this application. "
+"Error message: {}"
+msgstr ""
+"Tuccḍa deg ulday n tuqqna n uẓeṭṭa i usenqed n yimucceḍen. Senqed belli "
+"azeṭṭa iteddu, yerna aɣrab n tmes ur yessewḥal ara asnas-a. Izen n tuccḍa: {}"
+
+#. TRANSLATORS: This is cleaner name for cleaners imported from winapp2.ini
+#: ../bleachbit/Winapp.py
+msgid "Applications"
+msgstr "Isnasen"
+
+#. TRANSLATORS: This is cleaner name for cleaners imported from winapp2.ini
+#: ../bleachbit/Winapp.py
+msgid "Internet"
+msgstr "Internet"
+
+#. TRANSLATORS: This is cleaner name for cleaners imported from winapp2.ini
+#: ../bleachbit/Winapp.py
+msgid "Multimedia"
+msgstr "Agetmedia"
+
+#. TRANSLATORS: This is cleaner name for cleaners imported from winapp2.ini
+#: ../bleachbit/Winapp.py
+msgid "Utilities"
+msgstr "Ifecka"
+
+#. TRANSLATORS: Cleaner category name for games imported from winapp2.ini.
+#: ../bleachbit/Winapp.py
+msgid "Games"
+msgstr "Uraren"
+
+#. TRANSLATORS: Description shown for a cleaner imported from winapp2.ini,
+#. which is a database of cleaning definitions.
+#: ../bleachbit/Winapp.py
+msgid "Imported from winapp2.ini"
+msgstr "Yettwakter seg ufaylu winapp2.ini"
+
+#. TRANSLATORS: Warning shown when cleaning Windows Updates without administrator access.
+#: ../bleachbit/Windows.py
+msgid "Administrator privileges are required to clean Windows Updates"
+msgstr "Tlaq tseglut n unedbal akken ad tesfḍeḍ imucceḍen n Windows"
+
+#. TRANSLATORS: Message in log file when stopping a Windows service.
+#. The placeholder is the code name of the service.
+#: ../bleachbit/Windows.py
+#, python-format
+msgid "stop Windows service %(service)s"
+msgstr "Ḥbes tanfa %(service)s n Windows"
+
+#. TRANSLATORS: Message in log file when starting a Windows service.
+#. The placeholder is the code name of the service.
+#: ../bleachbit/Windows.py
+#, python-format
+msgid "start Windows service %(service)s"
+msgstr "Senker tanfa %(service)s n Windows"
+
+#: ../bleachbit/Wipe.py
+msgid ""
+"There was at least one file on a file system that does not support advanced "
+"overwriting."
+msgstr ""
+"Yella xerṣum yiwen ufaylu deg unagraw n yifuyla i deg ur yezmir ara ad yeddu "
+"wallus n tira anaẓi."
+
+#. TRANSLATORS: Debug log message shown during file wiping. 'Wiping' is a
+#. present participle (ongoing action) refering to secure overwrite.
+#. %(pathname)s is the file/directory path; %(fstype)s is the file system type
+#. (e.g., ext3, ntfs). Do not translate placeholders.
+#: ../bleachbit/Wipe.py
+#, python-format
+msgid "Wiping path %(pathname)s with file system type %(fstype)s"
+msgstr "Asfaḍ n ubrid %(pathname)s deg unagraw n yifuyla n wanaw %(fstype)s"
+
+#: ../bleachbit/Wipe.py
+#, python-format
+msgid "Path to wipe must be an existing directory: %s"
+msgstr "Abrid ara yettwasfeḍ ilaq ad yili d akaram yellan: %s"
+
+#. TRANSLATORS: Warning in the log. BleachBit wipes free space by
+#. creating temporary files in the chosen folder. This folder can be
+#. changed by any user on the computer, so another user could tamper
+#. with those files. %s is the folder path.
+#: ../bleachbit/Wipe.py
+#, python-format
+msgid ""
+"Wiping free space here is unsafe because any user can change this folder: %s"
+msgstr ""
+"Asfaḍ n tallunt tilellit dagi d amihaw, acku yal aseqdac yezmer ad ibeddel "
+"akaram-a: %s"
+
+#. TRANSLATORS: Status message while wiping a drive's empty space.
+#: ../bleachbit/Wipe.py
+msgid "Creating new, temporary file for wiping empty space."
+msgstr "Asnulfu n ufaylu askudan amaynut i usfaḍ n tallunt tilemt."
+
+#: ../bleachbit/Wipe.py
+#, python-format
+msgid "Error #%d when flushing the file buffer."
+msgstr "Tuccḍa #%d deg tuzzna n yisefka seg tkatut n weḥraz ɣer ufaylu."
+
+#. TRANSLATORS: Debug message summarizing a write operation. All placeholders
+#. are numeric: %(file_count)d = integer number of files written;
+#. %(total_bytes)d = integer total bytes written; %(elapsed_sec)d = integer
+#. elapsed seconds; %(rate_mbs).2f = decimal megabytes per second (e.g., 3.14).
+#. Do not translate variables.
+#: ../bleachbit/Wipe.py
+#, python-format
+msgid ""
+"Wrote %(file_count)d files and %(total_bytes)d bytes in %(elapsed_sec)d "
+"seconds at %(rate_mbs).2f MB/s"
+msgstr ""
+"Ttwarun %(file_count)d n yifuyla d %(total_bytes)d n yitamḍanen deg %"
+"(elapsed_sec)d n tsinin, s urured n %(rate_mbs).2f MB/s"
+
+#. TRANSLATORS: Debug message showing disk space available to regular (non-root) users.
+#. %(bytes)d is an integer count of bytes free; %(inodes)d is an integer count of inodes free.
+#. Do not translate variables.
+#: ../bleachbit/Wipe.py
+#, python-format
+msgid "%(bytes)d bytes and %(inodes)d inodes available to non-super-user"
+msgstr ""
+"%(bytes)d n yitamḍanen d %(inodes)d n inodes llan i yiseqdacen ur nesɛi ara "
+"taseglut n root"
+
+#. TRANSLATORS: Debug message showing disk space available to the root (admin) user.
+#. %(bytes)d is an integer count of bytes free; %(inodes)d is an integer count of inodes free.
+#. Do not translate variables.
+#: ../bleachbit/Wipe.py
+#, python-format
+msgid "%(bytes)d bytes and %(inodes)d inodes available to super-user"
+msgstr "%(bytes)d n yitamḍanen d %(inodes)d n inodes llan i useqdac root"
+
+#: ../bleachbit/Wipe.py
+msgid "Encountered unknown error #0 while truncating file."
+msgstr "Teḍra-d tuccḍa tarussint #0 deg tgezmi n ufaylu."
+
+#. TRANSLATORS: This indicates an error.  The special keyword
+#. %(operation)s will be replaced by 'firefox' or 'opera' or
+#. some other cleaner ID.  The special keyword %(msg)s will be
+#. replaced by a message such as 'Permission denied.'
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Exception while running operation '%(operation)s': '%(msg)s'"
+msgstr "Tasureft deg uselkem n temhelt '%(operation)s': '%(msg)s'"
+
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "File not found: %s"
+msgstr "Afaylu ur yettwaf ara: %s"
+
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Access denied when flagging file for later delete: %s"
+msgstr "Adduf yettwagi deg ucraḍ n ufaylu i tukksa ticki: %s"
+
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Access denied when deleting registry value: %s"
+msgstr "Adduf yettwagi deg tukksa n wazal n Registry: %s"
+
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Access denied when deleting registry key: %s"
+msgstr "Adduf yettwagi deg tukksa n tsarut n Registry: %s"
+
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Access denied: %s"
+msgstr "Adduf yettwagi: %s"
+
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Database is locked: %s"
+msgstr "Taffa n yisefka tsekkeṛ: %s"
+
+#. TRANSLATORS: The special keyword {operation_option} will be
+#. replaced by a cleaner and option such as 'firefox.cache'.
+#. The special keyword {command} will be replaced by the
+#. cleaning action that failed. Do not translate the placeholders.
+#: ../bleachbit/Worker.py
+#, python-brace-format
+msgid "Error: {operation_option}: {command}"
+msgstr "Tuccḍa: {operation_option}: {command}"
+
+#. TRANSLATORS: 'empty' means 'unallocated'
+#: ../bleachbit/Worker.py
+msgid "Please wait. Wiping empty space."
+msgstr "Rǧu. Asfaḍ n tallunt tilemt iteddu."
+
+#. TRANSLATORS: Instruction shown while wiping a drive's empty space.
+#: ../bleachbit/Worker.py
+msgid "To stop this process, press the abort button on the toolbar and wait."
+msgstr ""
+"Akken ad tḥebseḍ akala-a, sit ɣef tqeffalt n usefsex deg tfeggagt n yifecka, "
+"sakin rǧu."
+
+#. TRANSLATORS: Warning shown while wiping a drive's
+#. empty space.
+#: ../bleachbit/Worker.py
+msgid ""
+"If the application is force closed before the process is complete, large "
+"files may remain on the disk, and they may use all available space. To "
+"remove them, start BleachBit again."
+msgstr ""
+"Ma yettwamdel usnas s tmara uqbel ad ifukk ukala, zemren ad qqimen yifuyla "
+"imeqqranen deg uḍebsi u ad ṭṭfen akk tallunt yellan. Akken ad ten-tekkseḍ, "
+"ales asenker n BleachBit."
+
+#. TRANSLATORS: %s is replaced with Firefox, System, etc.
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Please wait.  Cleaning %s."
+msgstr "Rǧu. Asfaḍ n %s iteddu."
+
+#. TRANSLATORS: %d is the estimated number of minutes remaining.
+#: ../bleachbit/Worker.py
+#, no-python-format
+msgid "About %d minute remaining."
+msgid_plural "About %d minutes remaining."
+msgstr[0] "Mazal azal n %d n tesdat."
+msgstr[1] "Mazal azal n %d n tesdatin."
+
+#. TRANSLATORS: This refers to disk space that was
+#. really recovered (in other words, not a preview)
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Disk space recovered: %s"
+msgstr "Tallunt n uḍebsi yettwaslellin: %s"
+
+#. TRANSLATORS: This refers to a preview (no real
+#. changes were made yet)
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Disk space to be recovered: %s"
+msgstr "Tallunt n uḍebsi ara yettwaslellin: %s"
+
+#. TRANSLATORS: This refers to the number of files really
+#. deleted (in other words, not a preview).
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Files deleted: %d"
+msgstr "Ifuyla yettwakksen: %d"
+
+#. TRANSLATORS: This refers to the number of files that
+#. would be deleted (in other words, simply a preview).
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Files to be deleted: %d"
+msgstr "Ifuyla ara yettwakksen: %d"
+
+#. TRANSLATORS: %d is the number of special cleaning operations
+#. completed. Special operations are cleaning actions that do
+#. not delete a file, such as overwriting a file's contents,
+#. truncating a file, or deleting a Windows registry key.
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Special operations: %d"
+msgstr "Timhalin tuzzigin: %d"
+
+#. TRANSLATORS: %d is the count of errors that occurred
+#. during the cleaning or preview operation.
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Errors: %d"
+msgstr "Tuccḍiwin: %d"
+
+#. TRANSLATORS: The "deep scan" feature searches over broad
+#. areas of the file system such as the user's whole home directory
+#. or all the system executables.
+#: ../bleachbit/Worker.py
+msgid "Please wait.  Running deep scan."
+msgstr "Rǧu. Aḍummu lqayen iteddu."
+
+#. TRANSLATORS: %s is replaced with Firefox, System, etc.
+#: ../bleachbit/Worker.py
+#, python-format
+msgid "Please wait.  Previewing %s."
+msgstr "Rǧu. Taskant n %s tetteddu."
+
+#. TRANSLATORS: This menu item opens a file picker dialog where the
+#. user can select one or more files. The selected files are then
+#. securely deleted by overwriting their data before removal, making
+#. recovery impossible. "Shredding" refers to this secure deletion process.
+#: ../share/app-menu.ui
+msgid "_Shred Files"
+msgstr "_Senger ifuyla"
+
+#. TRANSLATORS: This menu item prompts the user to select one or
+#. more folders using a folder picker dialog. Then, it securely deletes
+#. the selected folder(s) and all their contents. "Shredding" means
+#. overwriting data before deletion to prevent recovery.
+#: ../share/app-menu.ui
+msgid "Sh_red Folders"
+msgstr "Se_nger ikaramen"
+
+#. TRANSLATORS: This menu item reads file or folder paths from the
+#. clipboard, then securely deletes them. "Shredding" means overwriting
+#. data before deletion to prevent recovery. The clipboard is cleared
+#. after the operation.
+#: ../share/app-menu.ui
+msgid "Shred Paths from Clipboard"
+msgstr "Senger iberdan seg tecfawit"
+
+#. TRANSLATORS: This menu item prompts the user to select a folder.
+#. It then fills the partition with data until full, overwriting any
+#. recoverable traces of previously deleted files. "Empty space" refers
+#. to unallocated disk space where deleted file data may still exist.
+#: ../share/app-menu.ui
+msgid "_Wipe Empty Space"
+msgstr "_Sfeḍ tallunt tilemt"
+
+#. TRANSLATORS: This menu item creates decoy files filled with random
+#. data to mislead anyone searching for sensitive information. "Chaff" refers
+#. to material used as a distraction or decoy.
+#: ../share/app-menu.ui
+msgid "_Make Chaff"
+msgstr "_Snulfu-d isefka isugnanen"
+
+#. TRANSLATORS: This menu item securely deletes the application's
+#. configuration files (resetting all settings to defaults) and then
+#. closes the application. "Shredding" means overwriting data before
+#. deletion to prevent recovery.
+#: ../share/app-menu.ui
+msgid "S_hred Settings and Quit"
+msgstr "S_enger iɣewwaṛen sakin ffeɣ"
+
+#. TRANSLATORS: This menu item displays technical details about
+#. the system, sometimes useful for troubleshooting issues.
+#: ../share/app-menu.ui
+msgid "S_ystem Information"
+msgstr "Talɣut ɣef u_nagraw"
+
+#. TRANSLATORS: This menu item opens a web browser to a page
+#. with links to documentation and the bug tracker.
+#: ../share/app-menu.ui
+msgid "_Help"
+msgstr "_Tallalt"
+
+#. TRANSLATORS: This menu item opens a dialog with general information
+#. about the application, including its name, version, description,
+#. copyright, license, and website link.
+#: ../share/app-menu.ui
+msgid "_About BleachBit"
+msgstr "_Ɣef BleachBit"

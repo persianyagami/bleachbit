@@ -1,37 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
 
-    BleachBit
-    Copyright (C) 2008-2020 Andrew Ziem
-    https://www.bleachbit.org
+SPDX-License-Identifier: GPL-3.0-or-later
+Copyright (c) 2008-2026 Andrew Ziem.
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+This work is licensed under the terms of the GNU GPL, version 3 or
+later.  See the COPYING file in the top-level directory.
 
 -->
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+  <!-- Unlike xs:boolean, no 1, 0 or surrounding spaces: boolstr_to_bool() rejects them -->
+  <xs:simpleType name="trueOrFalse">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee]"/>
+    </xs:restriction>
+  </xs:simpleType>
   <xs:attributeGroup name="operatingSystem">
     <xs:attribute name="os" use="optional">
       <xs:simpleType>
         <xs:restriction base="xs:string">
-          <xs:enumeration value="bsd"/>
-          <xs:enumeration value="darwin"/>
-          <xs:enumeration value="linux"/>
-          <xs:enumeration value="netbsd"/>
-          <xs:enumeration value="openbsd"/>
-          <xs:enumeration value="freebsd"/>
-          <xs:enumeration value="unix"/>
-          <xs:enumeration value="windows"/>
+          <xs:pattern value="!?(bsd|darwin|linux|macos|netbsd|openbsd|freebsd|unix|windows)(\s*,\s*!?(bsd|darwin|linux|macos|netbsd|openbsd|freebsd|unix|windows))*"/>
         </xs:restriction>
       </xs:simpleType>
     </xs:attribute>
@@ -43,7 +31,7 @@
           <xs:complexType>
             <xs:simpleContent>
               <xs:extension base="xs:string">
-                <xs:attribute name="translate" type="xs:boolean" default="false"/>
+                <xs:attribute name="translate" type="trueOrFalse" default="false"/>
               </xs:extension>
             </xs:simpleContent>
           </xs:complexType>
@@ -70,6 +58,7 @@
                     </xs:restriction>
                   </xs:simpleType>
                 </xs:attribute>
+                <xs:attribute name="same_user" type="trueOrFalse" use="optional"/>
               </xs:extension>
             </xs:simpleContent>
           </xs:complexType>
@@ -82,7 +71,16 @@
                   <xs:simpleContent>
                     <xs:extension base="xs:string">
                       <xs:attributeGroup ref="operatingSystem"/>
-                      <xs:attribute name="search" use="optional" type="xs:string"/>
+                      <xs:attribute name="search" use="optional">
+                        <xs:simpleType>
+                          <xs:restriction base="xs:string">
+                            <xs:enumeration value="glob"/>
+                            <xs:enumeration value="winreg"/>
+                          </xs:restriction>
+                        </xs:simpleType>
+                      </xs:attribute>
+                      <xs:attribute name="path" use="optional" type="xs:string"/>
+                      <xs:attribute name="name" use="optional" type="xs:string"/>
                     </xs:extension>
                   </xs:simpleContent>
                 </xs:complexType>
@@ -98,7 +96,7 @@
                 <xs:complexType>
                   <xs:simpleContent>
                     <xs:extension base="xs:string">
-                      <xs:attribute name="translate" type="xs:boolean" default="false"/>
+                      <xs:attribute name="translate" type="trueOrFalse" default="true"/>
                       <xs:attribute name="translators" type="xs:string"/>
                     </xs:extension>
                   </xs:simpleContent>
@@ -113,7 +111,15 @@
                   </xs:simpleContent>
                 </xs:complexType>
               </xs:element>
-              <xs:element name="warning" type="xs:string" minOccurs="0" maxOccurs="1"/>
+              <xs:element name="warning" minOccurs="0" maxOccurs="1">
+                <xs:complexType>
+                  <xs:simpleContent>
+                    <xs:extension base="xs:string">
+                      <xs:attribute name="translators" type="xs:string"/>
+                    </xs:extension>
+                  </xs:simpleContent>
+                </xs:complexType>
+              </xs:element>
               <xs:element name="action" maxOccurs="unbounded">
                 <xs:complexType>
                   <xs:simpleContent>
@@ -122,24 +128,30 @@
                       <xs:attribute name="command" use="required">
                         <xs:simpleType>
                           <xs:restriction base="xs:string">
-                            <xs:enumeration value="apt.clean"/>
                             <xs:enumeration value="apt.autoclean"/>
                             <xs:enumeration value="apt.autoremove"/>
+                            <xs:enumeration value="apt.clean"/>
                             <xs:enumeration value="chrome.autofill"/>
                             <xs:enumeration value="chrome.databases_db"/>
                             <xs:enumeration value="chrome.favicons"/>
                             <xs:enumeration value="chrome.history"/>
                             <xs:enumeration value="chrome.keywords"/>
+                            <xs:enumeration value="cookie"/>
                             <xs:enumeration value="delete"/>
                             <xs:enumeration value="dnf.autoremove"/>
                             <xs:enumeration value="dnf.clean_all"/>
                             <xs:enumeration value="ini"/>
                             <xs:enumeration value="journald.clean"/>
                             <xs:enumeration value="json"/>
+                            <xs:enumeration value="macos.orphaned_framework_versions"/>
                             <xs:enumeration value="mozilla.favicons"/>
                             <xs:enumeration value="mozilla.url.history"/>
                             <xs:enumeration value="office_registrymodifications"/>
+                            <xs:enumeration value="pacman.cache"/>
                             <xs:enumeration value="process"/>
+                            <xs:enumeration value="process.terminate"/>
+                            <xs:enumeration value="shred"/>
+                            <xs:enumeration value="snap.disabled"/>
                             <xs:enumeration value="sqlite.vacuum"/>
                             <xs:enumeration value="truncate"/>
                             <xs:enumeration value="win.shell.change.notify"/>
@@ -156,7 +168,14 @@
                       <xs:attribute name="nregex" type="xs:string"/>
                       <xs:attribute name="wholeregex" type="xs:string"/>
                       <xs:attribute name="nwholeregex" type="xs:string"/>
-                      <xs:attribute name="type" type="xs:string"/>
+                      <xs:attribute name="type">
+                        <xs:simpleType>
+                          <xs:restriction base="xs:string">
+                            <xs:enumeration value="d"/>
+                            <xs:enumeration value="f"/>
+                          </xs:restriction>
+                        </xs:simpleType>
+                      </xs:attribute>
                       <xs:attribute name="wait" type="xs:string"/>
                       <xs:attributeGroup ref="operatingSystem"/>
                       <xs:attribute name="search">
@@ -172,12 +191,16 @@
                         </xs:simpleType>
                       </xs:attribute>
                       <xs:attribute name="section" type="xs:string"/>
+                      <xs:attribute name="same_user" type="trueOrFalse"/>
+                      <!-- Only supported when search="deep" -->
+                      <xs:attribute name="skip_open" type="trueOrFalse"/>
                     </xs:extension>
                   </xs:simpleContent>
                 </xs:complexType>
               </xs:element>
             </xs:sequence>
             <xs:attribute name="id" type="xs:string" use="required"/>
+            <xs:attributeGroup ref="operatingSystem"/>
           </xs:complexType>
         </xs:element>
         <xs:element name="localizations" minOccurs="0">

@@ -1,0 +1,78 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - '**'
+      - '!dependabot/**'
+    paths-ignore: &paths-ignore
+      - 'appveyor.yml'
+      - 'bleachbit.png'
+      - 'bleachbit.svg'
+      - 'bleachbit.spec'
+      - 'COPYING'
+      - 'debian/**'
+      - 'doc/**'
+      - 'docker/**'
+      - 'MANIFEST.in'
+      - 'org.bleachbit.BleachBit.desktop'
+      - 'org.bleachbit.BleachBit.metainfo.xml'
+      - 'org.bleachbit.policy'
+      - 'po/**'
+      - 'README.md'
+  pull_request:
+    branches:
+      - '**'
+      - '!dependabot/**'
+    paths-ignore: *paths-ignore
+  workflow_dispatch:
+  schedule:
+    - cron: "30 4 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'master' && github.ref_type != 'tag' }}
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    # Normal runtime is about 1.5 minutes on ubuntu-latest, but a test on
+    # ubuntu-slim was 4 minutes.
+    timeout-minutes: 5
+
+    permissions:
+      security-events: write # upload results to code scanning
+      packages: read # fetch internal/private CodeQL packs
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: python
+            build-mode: none
+
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: +security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}

@@ -1,7 +1,7 @@
 ;  vim: ts=4:sw=4:expandtab
 ;
 ;  BleachBit
-;  Copyright (C) 2008-2020 Andrew Ziem
+;  Copyright (C) 2008-2025 Andrew Ziem
 ;  https://www.bleachbit.org
 ;
 ;  This program is free software: you can redistribute it and/or modify
@@ -15,7 +15,7 @@
 ;  GNU General Public License for more details.
 ;
 ;  You should have received a copy of the GNU General Public License
-;  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+;  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ;  @scriptversion v3.0.1.1429
 ;  @scriptdate 2019-12-01
@@ -30,8 +30,23 @@
 ; Note that your executable compressor should not compress the first icon.
 
 !ifdef packhdr
-  ;Using UPX path info from setup_py2exe.py ->
-  !packhdr "$%TEMP%\exehead.tmp" '"\upx\upx.exe" -9 -q "$%TEMP%\exehead.tmp"'
+  ;Using UPX path info from windows/setup.py ->
+  !ifndef UPX_EXE
+    !error "packhdr is defined but UPX_EXE is not. Pass /DUPX_EXE=<path> to makensis."
+  !endif
+  !packhdr "$%TEMP%\exehead.tmp" '"${UPX_EXE}" -9 -q "$%TEMP%\exehead.tmp"'
+!endif
+
+
+;--------------------------------
+;NSIS version
+
+; Older NSIS creates the plugin directory with weak permissions (CVE-2023-37378),
+; loses a race creating it (bug 1315, fixed in 3.11) or uses the Low IL temp directory
+; when elevated (bug 1326, fixed in 3.12), and the inner instance runs elevated.
+; The version is packed as decimal digits: 3.12 is 0x03012000.
+!if ${NSIS_PACKEDVERSION} < 0x03012000
+  !error "NSIS 3.12 or later is required"
 !endif
 
 
@@ -47,11 +62,21 @@
   ;Name and file
   !define prodname "BleachBit"
   !define COMPANY_NAME "BleachBit" ; # used by NsisMultiUser
+  !define PROG_AUTHOR "Andrew Ziem"
+  !define PROG_COPYRIGHT "Andrew Ziem"
+  BrandingText "${PROG_COPYRIGHT}"
   Name "${prodname}"
+  ; ----------------------------- disable warning overwrite default language strings (wrn 6030)
+  ;!pragma warning disable 6030
+  ; ----------------------------- disable warning missing strings in some not english section (wrn 6040)
+  ;!pragma warning disable 6040
+
+; windows/setup.py passes UPX_TAG for UPX builds
+!define /ifndef UPX_TAG ""
 !ifdef NoTranslations
-  OutFile "${prodname}-${VERSION}-setup-English.exe"
+  OutFile "${prodname}-${VERSION}-setup-English${UPX_TAG}.exe"
 !else
-  OutFile "${prodname}-${VERSION}-setup.exe"
+  OutFile "${prodname}-${VERSION}-setup${UPX_TAG}.exe"
 !endif
 
 ; Unicode requires NSIS version 3 or later
@@ -109,22 +134,29 @@ Unicode true
 !define File_VERSION ${VERSION}.0
 
 !ifdef NoTranslations
-  VIAddVersionKey /LANG=1033 "ProductName" "BleachBit"
-  VIAddVersionKey /LANG=1033 "CompanyName" "BleachBit.org"
-  VIAddVersionKey /LANG=1033 "LegalCopyright" "Andrew Ziem"
-  VIAddVersionKey /LANG=1033 "FileDescription" "BleachBit Setup"
-  VIAddVersionKey /LANG=1033 "ProductVersion" "${File_VERSION}"
-  VIAddVersionKey /LANG=1033 "FileVersion" "${File_VERSION}"
+  VIAddVersionKey /LANG=1033 "ProductName"     "${prodname}"
+  VIAddVersionKey /LANG=1033 "ProductVersion"  "${File_VERSION}"
+  VIAddVersionKey /LANG=1033 "Comments"        ""
+  VIAddVersionKey /LANG=1033 "CompanyName"     "BleachBit.org"
+  VIAddVersionKey /LANG=1033 "LegalTrademarks" "${PROG_AUTHOR}"
+  VIAddVersionKey /LANG=1033 "LegalCopyright"  "${PROG_COPYRIGHT}"
+  VIAddVersionKey /LANG=1033 "FileVersion"     "${File_VERSION}"
+  VIAddVersionKey /LANG=1033 "FileDescription" "${prodname} Setup"
 !endif
 
 !ifndef NoTranslations
-  VIAddVersionKey /LANG=0 "ProductName" "BleachBit"
-  VIAddVersionKey /LANG=0 "CompanyName" "BleachBit.org"
-  VIAddVersionKey /LANG=0 "LegalCopyright" "Andrew Ziem"
-  VIAddVersionKey /LANG=0 "FileDescription" "BleachBit Setup"
-  VIAddVersionKey /LANG=0 "ProductVersion" "${File_VERSION}"
-  VIAddVersionKey /LANG=0 "FileVersion" "${File_VERSION}"
+  VIAddVersionKey /LANG=0    "ProductName"     "${prodname}"
+  VIAddVersionKey /LANG=0    "ProductVersion"  "${File_VERSION}"
+  VIAddVersionKey /LANG=0    "Comments"        ""
+  VIAddVersionKey /LANG=0    "CompanyName"     "BleachBit.org"
+  VIAddVersionKey /LANG=0    "LegalTrademarks" "${PROG_AUTHOR}"
+  VIAddVersionKey /LANG=0    "LegalCopyright"  "${PROG_COPYRIGHT}"
+  VIAddVersionKey /LANG=0    "FileVersion"     "${File_VERSION}"
+  VIAddVersionKey /LANG=0    "FileDescription" "${prodname} Setup"
 !endif
+
+; VIAddVersionKey "InternalName"       ""
+; VIAddVersionKey "OriginalFilename"   ""
 
 VIProductVersion ${File_VERSION}
 VIFileVersion ${File_VERSION}
@@ -134,9 +166,6 @@ VIFileVersion ${File_VERSION}
   ;Default installation folder
   ; NsisMultiUser sets the directory.
   ;InstallDir "$PROGRAMFILES\${prodname}"
-
-  ;Get installation folder from registry if available
-  InstallDirRegKey HKCU "Software\${prodname}" ""
 
   ;Request application privileges for Windows Vista
   ; NsisMultiUser sets this, when needed.
@@ -148,7 +177,7 @@ VIFileVersion ${File_VERSION}
 ; https://nsis.sourceforge.io/Docs/Chapter4.html#flags
 
 ; Set default compressor:
-; https://ci.appveyor.com/ do already "SetCompressor /FINAL zlib"
+; CI already does "SetCompressor /FINAL zlib"
 ; Best compression: https://nsis.sourceforge.io/Docs/Chapter1.html#intro-features
 !ifdef Compressor
   SetCompressor /SOLID lzma
@@ -163,8 +192,11 @@ VIFileVersion ${File_VERSION}
 !include UAC.nsh
 !include NsisMultiUser.nsh
 !include LogicLib.nsh
+!include Sections.nsh
 !include StdUtils.nsh
+!include WinVer.nsh
 
+Caption "$(INSTALLER_CAPTION)"
 
 ;--------------------------------
 ;Interface Settings
@@ -193,9 +225,11 @@ VIFileVersion ${File_VERSION}
 
 ; Installer:
 !define MUI_WELCOMEFINISHPAGE_BITMAP "picture.MUI2\bleachbit_164x314.bmp"
+!define MUI_PAGE_CUSTOMFUNCTION_PRE PageWelcomeLicensePre
 !insertmacro MUI_PAGE_WELCOME
 !define MUI_LICENSEPAGE_RADIOBUTTONS
-!insertmacro MUI_PAGE_LICENSE "..\COPYING"
+!define MUI_PAGE_CUSTOMFUNCTION_PRE PageWelcomeLicensePre
+!insertmacro MUI_PAGE_LICENSE "gpl-3.0.rtf"
 ;Later:
 ;!insertmacro MUI_PAGE_LICENSE "$(MUI_LICENSE)"
 ;!define MUI_PAGE_CUSTOMFUNCTION_PRE "MULTIUSER_PAGE_INSTALLMODE_Pre"
@@ -205,10 +239,11 @@ VIFileVersion ${File_VERSION}
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_NOAUTOCLOSE
-!define MUI_FINISHPAGE_RUN "$INSTDIR\${prodname}.exe"
-!define MUI_FINISHPAGE_LINK "Visit the ${prodname} web site."
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_FUNCTION RunBleachBit
+;!define MUI_FINISHPAGE_LINK "Visit the ${prodname} web site."
 ;Later:
-;!define MUI_FINISHPAGE_LINK "$(BLEACHBIT_MUI_FINISHPAGE_LINK)"
+!define MUI_FINISHPAGE_LINK "$(BLEACHBIT_MUI_FINISHPAGE_LINK)"
 !define MUI_FINISHPAGE_LINK_LOCATION "https://www.bleachbit.org"
 ;Later:
 ;!define MUI_FINISHPAGE_LINK_LOCATION "${PRODURL}"
@@ -226,7 +261,6 @@ VIFileVersion ${File_VERSION}
 ; MUI_UNPAGE_DIRECTORY not needed, ATM.
 ; !insertmacro MUI_UNPAGE_DIRECTORY
 !insertmacro MUI_UNPAGE_COMPONENTS
-UninstallText $(BLEACHBIT_UNINSTALL_TEXT)
 !insertmacro MUI_UNPAGE_INSTFILES
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
 !insertmacro MUI_UNPAGE_FINISH
@@ -241,7 +275,6 @@ UninstallText $(BLEACHBIT_UNINSTALL_TEXT)
 !ifndef NoTranslations
   !insertmacro MUI_LANGUAGE "Albanian"
   !insertmacro MUI_LANGUAGE "Arabic"
-  !insertmacro MUI_LANGUAGE "Armenian"
   !insertmacro MUI_LANGUAGE "Asturian"
   !insertmacro MUI_LANGUAGE "Basque"
   !insertmacro MUI_LANGUAGE "Belarusian"
@@ -262,14 +295,19 @@ UninstallText $(BLEACHBIT_UNINSTALL_TEXT)
   !insertmacro MUI_LANGUAGE "Hungarian"
   !insertmacro MUI_LANGUAGE "Indonesian"
   !insertmacro MUI_LANGUAGE "Italian"
+  ; Override upstream Italian.nsh: add line break on finish page (issue #1453)
+  ; The last LangString wins; 6030 only warns about the replaced string
+  !pragma warning push
+  !pragma warning disable 6030
+  LangString MUI_TEXT_FINISH_INFO_REBOOT ${LANG_ITALIAN} "Per completare l'installazione di $(^NameDA) il computer deve essere riavviato.$\r$\n$\r$\nVuoi riavviarlo ora?"
+  LangString MUI_UNTEXT_FINISH_INFO_REBOOT ${LANG_ITALIAN} "Per completare la disinstallazione di $(^NameDA) il computer deve essere riavviato.$\r$\n$\r$\nVuoi riavviarlo ora?"
+  !pragma warning pop
   !insertmacro MUI_LANGUAGE "Japanese"
   !insertmacro MUI_LANGUAGE "Korean"
-  !insertmacro MUI_LANGUAGE "Kurdish"
   !insertmacro MUI_LANGUAGE "Latvian"
   !insertmacro MUI_LANGUAGE "Lithuanian"
   !insertmacro MUI_LANGUAGE "Malay"
   !insertmacro MUI_LANGUAGE "Norwegian"
-  !insertmacro MUI_LANGUAGE "NorwegianNynorsk"
   !insertmacro MUI_LANGUAGE "Polish"
   !insertmacro MUI_LANGUAGE "Portuguese"
   !insertmacro MUI_LANGUAGE "PortugueseBR"
@@ -292,68 +330,114 @@ UninstallText $(BLEACHBIT_UNINSTALL_TEXT)
 
 !include NsisMultiUserLang.nsh
 
+!include "StrFunc.nsh"
+# Declare used functions
+${StrCase}
+
 ;--------------------------------
 ;Function
 
-; http://nsis.sourceforge.net/RefreshShellIcons
+; https://nsis.sourceforge.io/RefreshShellIcons
 Function RefreshShellIcons
   !define SHCNE_ASSOCCHANGED 0x08000000
   !define SHCNF_IDLIST 0
   System::Call 'shell32.dll::SHChangeNotify(i, i, i, i) v (${SHCNE_ASSOCCHANGED}, ${SHCNF_IDLIST}, 0, 0)'
 FunctionEnd
 
+; Start BleachBit as the user who ran setup, not the admin that elevated it
+Function RunBleachBit
+  HideWindow ; so BleachBit becomes the active window once setup exits
+  ${If} ${UAC_IsInnerInstance}
+    !insertmacro UAC_AsUser_ExecShell "open" "$INSTDIR\${prodname}.exe" "" "$INSTDIR" ""
+  ${Else}
+    ; Setup was started elevated, so there is no user instance to ask
+    ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\${prodname}.exe" "open" ""
+  ${EndIf}
+FunctionEnd
+
+; The elevated inner instance starts at the first page again, but the outer
+; one already showed these
+Function PageWelcomeLicensePre
+  ${If} $InstallShowPagesBeforeComponents = 0
+    Abort
+  ${EndIf}
+FunctionEnd
+
+Function .onVerifyInstDir
+  ; This callback belongs to MUI_PAGE_DIRECTORY and is called every time the user presses Browse
+  ; button and selects install directory. It does not affect typing in the input field.
+
+  ; The purpose is to prevent installation in a shared folder such as %ProgramFiles%
+  ; by adding the product name to the end.
+
+  ${GetFileName} $INSTDIR $R0 ; get the last part of the path
+  StrCmp $R0 ${prodname} no_append
+  StrCpy $INSTDIR "$INSTDIR\${prodname}"
+  no_append:
+FunctionEnd
+
 ;--------------------------------
 ;Default section
-Section Core (Required)
+Section "$(SECTION_CORE_NAME)" SectionCore
     SectionIn RO
 
-    SetOutPath $INSTDIR
-    File /r /x "locale" "..\dist\*.*"
-    File "..\COPYING"
-
-    SetOutPath "$INSTDIR\share\"
-    File "..\bleachbit.png"
+    !include FilesToInstall.nsh
 
     # uninstaller
-    WriteUninstaller "$INSTDIR\uninstall.exe"
-
+    WriteUninstaller "$INSTDIR\${UNINSTALL_FILENAME}"
 
     SetOutPath "$INSTDIR\"
     CreateDirectory "$SMPROGRAMS\${prodname}"
-    CreateShortCut "$SMPROGRAMS\${prodname}\Uninstall.lnk" "$INSTDIR\uninstall.exe"
 
     # register uninstaller in Add/Remove Programs
     !insertmacro MULTIUSER_RegistryAddInstallInfo ; add registry keys
-    WriteRegStr SHCTX "${MULTIUSER_INSTALLMODE_UNINSTALL_REGISTRY_KEY_PATH}$0" \
+    WriteRegStr SHCTX "${MULTIUSER_INSTALLMODE_UNINSTALL_REGISTRY_KEY_PATH}" \
         "HelpLink" "https://www.bleachbit.org/help"
-    WriteRegStr SHCTX "${MULTIUSER_INSTALLMODE_UNINSTALL_REGISTRY_KEY_PATH}$0" \
+    WriteRegStr SHCTX "${MULTIUSER_INSTALLMODE_UNINSTALL_REGISTRY_KEY_PATH}" \
         "URLInfoAbout" "https://www.bleachbit.org/"
-    WriteRegStr SHCTX "${MULTIUSER_INSTALLMODE_UNINSTALL_REGISTRY_KEY_PATH}$0" \
+    WriteRegStr SHCTX "${MULTIUSER_INSTALLMODE_UNINSTALL_REGISTRY_KEY_PATH}" \
         "URLUpdateInfo" "https://www.bleachbit.org/download"
+    WriteRegStr SHCTX "${MULTIUSER_INSTALLMODE_UNINSTALL_REGISTRY_KEY_PATH}" \
+                 "DisplayName" "${prodname}"
+
+    # Build cache now while there is a GUI progress bar.
+    DetailPrint "$(MULTIPRINT1)"
+    DetailPrint "$(MULTIPRINT2)"
+    # nsExec runs it without flashing a console window
+    nsExec::Exec '"$instdir\fc-cache.exe"'
+    Pop $0 ; exit code
 SectionEnd
 
 
-SectionGroup /e Shortcuts
-    Section "Start menu" SectionStart
+SectionGroup /e "$(SECTION_SHORTCUTS_NAME)" SectionShortCuts
+    Section "$(SECTION_START_MENU_NAME)" SectionStart
         SetOutPath "$INSTDIR\" # this affects CreateShortCut's 'Start in' directory
         CreateShortCut "$SMPROGRAMS\${prodname}\${prodname}.lnk" "$INSTDIR\${prodname}.exe" \
             "" "$INSTDIR\${prodname}.exe"
-        CreateShortCut "$SMPROGRAMS\${prodname}\${prodname} No UAC.lnk" \
+        CreateShortCut "$SMPROGRAMS\${prodname}\$(SHORTCUT_NO_UAC).lnk" \
             "$INSTDIR\${prodname}.exe" \
             "--no-uac --gui" "$INSTDIR\${prodname}.exe"
-        CreateShortCut "$SMPROGRAMS\${prodname}\${prodname} Debugging Terminal.lnk" \
+        CreateShortCut "$SMPROGRAMS\${prodname}\$(SHORTCUT_DEBUGGING_TERMINAL).lnk" \
             "$INSTDIR\${prodname}_console.exe" "" "$INSTDIR\${prodname}.exe"
         Call RefreshShellIcons
-        WriteINIStr "$SMPROGRAMS\${prodname}\${prodname} Home Page.url" "InternetShortcut" "URL" "https://www.bleachbit.org/"
     SectionEnd
 
-    Section "Desktop" SectionDesktop
+    Section "$(SECTION_DESKTOP_NAME)" SectionDesktop
+        IfSilent 0 addDesktopShortcut
+        ${GetParameters} $R0
+        ${StrCase} $R0 $R0 "L" # "L" means lowercase
+        ${GetOptions} $R0 "/nodesktopshortcut" $R1
+        IfErrors addDesktopShortcut doNotAddDesktopShortcut
+        addDesktopShortcut:
         SetOutPath "$INSTDIR\" # this affects CreateShortCut's 'Start in' directory
         CreateShortcut "$DESKTOP\BleachBit.lnk" "$INSTDIR\${prodname}.exe"
         Call RefreshShellIcons
+
+        doNotAddDesktopShortcut:
+
     SectionEnd
 
-    Section /o "Quick launch" SectionQuickLaunch
+    Section /o "$(SECTION_QUICK_LAUNCH_NAME)" SectionQuickLaunch
         SetOutPath "$INSTDIR\" # this affects CreateShortCut's 'Start in' directory
         CreateShortcut "$QUICKLAUNCH\BleachBit.lnk" "$INSTDIR\${prodname}.exe"
         Call RefreshShellIcons
@@ -363,19 +447,19 @@ SectionGroupEnd
 
 
 !ifndef NoTranslations
-Section Translations
-    SetOutPath $INSTDIR\share\locale
-    File /r "..\dist\share\locale\*.*"
+Section "$(SECTION_TRANSLATIONS_NAME)" SectionTranslations
+  !include LocaleToInstall.nsh
 SectionEnd
 !endif
 
 ; Section for making Shred Integration optional
 !ifndef NoSectionShred
-  Section "Integrate Shred" SectionShred
+  Section "$(SECTION_INTEGRATE_SHRED_NAME)" SectionShred
     ; Register Windows Explorer Shell Extension (Shredder)
-    WriteRegStr HKCR "AllFileSystemObjects\shell\shred.bleachbit" "" 'Shred with BleachBit'
-    WriteRegStr HKCR "AllFileSystemObjects\shell\shred.bleachbit" "Icon" "$INSTDIR\bleachbit.exe,0"
-    WriteRegStr HKCR "AllFileSystemObjects\shell\shred.bleachbit\command" "" '"$INSTDIR\bleachbit.exe" --gui --no-uac --shred "%1"'
+    ; New keys under HKCR go to HKLM, which a per-user install cannot write
+    WriteRegStr SHCTX "Software\Classes\${SHRED_REGEX_KEY}" "" '$(SHRED_SHELL_MENU)'
+    WriteRegStr SHCTX "Software\Classes\${SHRED_REGEX_KEY}" "Icon" "$INSTDIR\bleachbit.exe,0"
+    WriteRegStr SHCTX "Software\Classes\${SHRED_REGEX_KEY}\command" "" '"$INSTDIR\bleachbit.exe" --context-menu "%1"'
   SectionEnd
 !endif
 
@@ -389,49 +473,216 @@ SectionEnd
 ;--------------------------------
 ;Installer Functions
 
+!macro SelectSectionIfExists SECTION PATH
+  ${If} ${FileExists} "${PATH}"
+    !insertmacro SelectSection ${SECTION}
+  ${Else}
+    !insertmacro UnselectSection ${SECTION}
+  ${EndIf}
+!macroend
+
+!macro CopySectionFromOuter SECTION
+  !insertmacro UAC_AsUser_GetSection Flags ${SECTION} $0
+  SectionSetFlags ${SECTION} $0
+!macroend
+
 Function .onInit
+
+  ${If} ${AtMostWin8.1}
+    MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "$(OLD_WINDOWS_WARNING)" /SD IDOK IDOK open_old_windows_page
+    Abort
+  ${EndIf}
 
   !insertmacro MULTIUSER_INIT
 
   ; Language display dialog
-  !insertmacro MUI_LANGDLL_DISPLAY
+  ; The elevated inner instance already has the language of the outer one
+  ${If} $IsInnerInstance = 0
+    !insertmacro MUI_LANGDLL_DISPLAY
+  ${EndIf}
 
-  ; Check whether application is already installed
-  ReadRegStr $R0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${prodname}" \
-     "UninstallString"
+  ; The outer instance already uninstalled the old version and preselected
+  ; its components
+  ${If} $IsInnerInstance = 1
+    !insertmacro CopySectionFromOuter ${SectionStart}
+    !insertmacro CopySectionFromOuter ${SectionDesktop}
+    !insertmacro CopySectionFromOuter ${SectionQuickLaunch}
+    !ifndef NoTranslations
+      !insertmacro CopySectionFromOuter ${SectionTranslations}
+    !endif
+    !insertmacro CopySectionFromOuter ${SectionShred}
+  ${EndIf}
 
-  ; If not already installed, skip uninstallation
-  StrCmp $R0 "" new_install
+  ; If not already installed, skip uninstallation. The outer instance handles
+  ; per-user installations, since HKCU in the elevated one can be the admin's
+  ${If} $IsInnerInstance = 0
+  ${AndIf} $IsAdmin = 0
+    StrCmp "$PerMachineUninstallString$PerUserUninstallString" "" new_install
+  ${Else}
+    StrCmp $PerMachineUninstallString "" new_install
+  ${EndIf}
 
   MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-    "${prodname} is already installed.  Click 'OK' to uninstall the old version before \
-    upgrading, or click 'Cancel' to abort the upgrade." \
+    "$(ALREADY_INSTALLED)" \
     /SD IDOK \
     IDOK uninstall_old
 
   Abort
 
   uninstall_old:
-  ; If installing in silent mode, also uninstall in silent mode
-  Var /GLOBAL uninstaller_cmd
-  StrCpy $uninstaller_cmd '$R0 _?=$INSTDIR'
-  IfSilent 0 +2
-  StrCpy $uninstaller_cmd "$uninstaller_cmd /S"
-  ExecWait $uninstaller_cmd ; Actually run the uninstaller
+  ${If} $PerMachineUninstallString != ""
+    StrCpy $R0 $PerMachineUninstallString
+    StrCpy $R1 $PerMachineInstallationFolder
+    ; BleachBit 2.2 and older did not record InstallLocation
+    ${IfThen} $R1 == "" ${|} StrCpy $R1 $INSTDIR ${|}
+    SetShellVarContext all
+    Call UninstallOld
+  ${EndIf}
+  ; A per-user installation is registered under HKCU instead. Not when
+  ; elevated: any process of the user can write that command
+  ${If} $PerUserUninstallString != ""
+  ${AndIf} $IsInnerInstance = 0
+  ${AndIf} $IsAdmin = 0
+    StrCpy $R0 $PerUserUninstallString
+    StrCpy $R1 $PerUserInstallationFolder
+    SetShellVarContext current
+    Call UninstallOld
+  ${EndIf}
+  ${If} $MultiUser.InstallMode == "AllUsers"
+    SetShellVarContext all
+  ${Else}
+    SetShellVarContext current
+  ${EndIf}
 
   new_install:
+  Return
+
+  ; On old version of Windows after user agrees to open the link.
+  open_old_windows_page:
+    ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "CurrentVersion"
+    ExecShell "open" "https://www.bleachbit.org/goto/old-windows?ver=${VERSION}&os=$R0&lang=$LANGUAGE"
+    Abort
+
+FunctionEnd
 
 
+; Run the old uninstaller command $R0 on the installation in $R1
+Function UninstallOld
+  Var /GLOBAL uninstaller_cmd
+  Call ReadOldComponents
+  StrCpy $uninstaller_cmd $R0
+  ; Run a copy so the old uninstaller can delete itself. In place it leaves
+  ; uninstall.exe behind and asks for a reboot to remove the folder
+  StrCpy $2 '"$R1\${UNINSTALL_FILENAME}"'
+  StrLen $3 $2
+  StrCpy $4 $R0 $3
+  ${If} $4 == $2
+    InitPluginsDir
+    ClearErrors
+    CopyFiles /SILENT "$R1\${UNINSTALL_FILENAME}" "$PLUGINSDIR"
+    ${IfNot} ${Errors}
+      StrCpy $4 $R0 "" $3
+      StrCpy $uninstaller_cmd '"$PLUGINSDIR\${UNINSTALL_FILENAME}"$4'
+    ${EndIf}
+  ${EndIf}
+  ; If installing in silent mode, also uninstall in silent mode
+  IfSilent 0 +2
+  StrCpy $uninstaller_cmd "$uninstaller_cmd /S"
+  ; _?= must come last: NSIS reads the rest of the line as the folder
+  StrCpy $uninstaller_cmd "$uninstaller_cmd _?=$R1"
+  ; Files in use get deleted at the next reboot, taking the new ones with them
+  close_bleachbit:
+  Call FindRunningBleachBit
+  ${If} $0 != ""
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(BLEACHBIT_RUNNING)" /SD IDCANCEL IDRETRY close_bleachbit
+    Abort
+  ${EndIf}
+  ClearErrors
+  ExecWait $uninstaller_cmd ; Actually run the uninstaller
+  ; Catch files still in use, e.g. by another user's BleachBit. Errors mean
+  ; the uninstaller failed or was cancelled and queued nothing
+  ${IfNot} ${Errors}
+    ${If} ${FileExists} "$R1\${prodname}.exe"
+    ${OrIf} ${FileExists} "$R1\${prodname}_console.exe"
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION "$(MUI_UNTEXT_FINISH_INFO_REBOOT)" /SD IDNO IDNO +2
+      Reboot
+      Abort
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+
+; Preselect the optional components the old installation in $R1 has, before
+; its uninstaller removes them. Only the first one counts. Clobbers $0.
+Function ReadOldComponents
+  Var /GLOBAL old_components_read
+  ${If} $old_components_read = 1
+    Return
+  ${EndIf}
+  StrCpy $old_components_read 1
+  !insertmacro SelectSectionIfExists ${SectionStart} "$SMPROGRAMS\${prodname}\${prodname}.lnk"
+  !insertmacro SelectSectionIfExists ${SectionDesktop} "$DESKTOP\BleachBit.lnk"
+  !insertmacro SelectSectionIfExists ${SectionQuickLaunch} "$QUICKLAUNCH\BleachBit.lnk"
+  !ifndef NoTranslations
+    !insertmacro SelectSectionIfExists ${SectionTranslations} "$R1\share\locale\*.*"
+  !endif
+  ; HKCR covers both the per-machine and the per-user key, but older
+  ; per-user installations could not write theirs, so only a per-machine
+  ; one shows whether Shred was deselected
+  ${If} $R0 == $PerMachineUninstallString
+    ReadRegStr $0 HKCR "${SHRED_REGEX_KEY}" ""
+    ${If} $0 == ""
+      !insertmacro UnselectSection ${SectionShred}
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+
+; Set $0 to the path of a BleachBit exe running from the folder in $R1, or to
+; "" if there is none. Clobbers $1-$7.
+Function FindRunningBleachBit
+  StrCpy $0 ""
+  System::Alloc 16384 ; room for 4096 process IDs
+  Pop $1
+  System::Call 'kernel32::K32EnumProcesses(p r1, i 16384, *i .r2) i .r3'
+  ${If} $3 <> 0
+    IntOp $2 $2 - 4
+    ${ForEach} $3 0 $2 + 4
+      IntPtrOp $4 $1 + $3
+      System::Call '*$4(i .r4)'
+      ; PROCESS_QUERY_LIMITED_INFORMATION, which also opens elevated processes
+      System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i r4) p .r5'
+      ${If} $5 <> 0
+        System::Call 'kernel32::QueryFullProcessImageName(p r5, i 0, t .r6, *i ${NSIS_MAX_STRLEN}) i .r7'
+        System::Call 'kernel32::CloseHandle(p r5)'
+        ${If} $7 <> 0
+          ${If} $6 == "$R1\${prodname}.exe"
+          ${OrIf} $6 == "$R1\${prodname}_console.exe"
+            StrCpy $0 $6
+            ${ExitFor}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${Next}
+  ${EndIf}
+  System::Free $1
 FunctionEnd
 
 
 ;--------------------------------
 ;Uninstaller Section
 
-UninstallText "BleachBit will be uninstalled from the following folder.  Click Uninstall to start the uninstallation.  WARNING: The uninstaller completely removes the installation directory including any files (such as custom cleaners) that you may have added or changed."
+UninstallText "$(UNINSTALL_TEXT)"
 
-Section "Uninstall"
-    RMDir /r "$INSTDIR"
+Section "Uninstall" SectionUninstall
+    Delete $INSTDIR\bleachbit.exe.log
+
+    !ifndef NoTranslations
+      !include LocaleToUninstall.nsh
+    !endif
+
+    !include FilesToUninstall.nsh
+
     DeleteRegKey HKCU "Software\${prodname}"
     # delete normal shortcuts
     RMDir /r "$SMPROGRAMS\${prodname}"
@@ -440,12 +691,46 @@ Section "Uninstall"
     Delete "$QUICKLAUNCH\BleachBit.lnk"
     Delete "$SMSTARTUP\BleachBit.lnk"
     # Remove Windows Explorer Shell Extension (Shredder)
-    DeleteRegKey HKCR "AllFileSystemObjects\shell\shred.bleachbit"
+    DeleteRegKey SHCTX "Software\Classes\${SHRED_REGEX_KEY}"
+
+    # The fc-cache run in 6.0.5 wrote its cache here, and the file list above only covers shipped files
+    # No RMDir /r, NSIS follows junctions
+    Delete "$INSTDIR\var\cache\fontconfig\*.cache-*"
+    Delete "$INSTDIR\var\cache\fontconfig\CACHEDIR.TAG"
+    RMDir "$INSTDIR\var\cache\fontconfig"
+    RMDir "$INSTDIR\var\cache"
+    RMDir "$INSTDIR\var"
+
+    # Remove the uninstaller as the very last step.
+    # If something goes wrong, let the user run it again.
+    Delete "$INSTDIR\${UNINSTALL_FILENAME}"
+    # Files the user added, like custom cleaners, are no reason to reboot
+    ${If} ${RebootFlag}
+        RMDir /REBOOTOK "$INSTDIR\."
+    ${Else}
+        RMDir "$INSTDIR\."
+    ${EndIf}
+
     # Remove the uninstaller from registry as the very last step.
     # If something goes wrong, let the user run it again.
     !insertmacro MULTIUSER_RegistryRemoveInstallInfo
 SectionEnd
 
+;-------------------------------- Set SectionDescription
+
+  ;Assign descriptions to sections
+  !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+    !insertmacro MUI_DESCRIPTION_TEXT ${SectionCore}         "$(SECTION_CORE_DESCRIPTION)"
+    !insertmacro MUI_DESCRIPTION_TEXT ${SectionShortCuts}    "$(SECTION_SHORTCUTS_DESCRIPTION)"
+    !insertmacro MUI_DESCRIPTION_TEXT ${SectionStart}        "$(SECTION_START_MENU_DESCRIPTION)"
+    !insertmacro MUI_DESCRIPTION_TEXT ${SectionDesktop}      "$(SECTION_DESKTOP_DESCRIPTION)"
+    !insertmacro MUI_DESCRIPTION_TEXT ${SectionQuickLaunch}  "$(SECTION_QUICK_LAUNCH_DESCRIPTION)"
+    !ifndef NoTranslations
+    !insertmacro MUI_DESCRIPTION_TEXT ${SectionTranslations} "$(SECTION_TRANSLATIONS_DESCRIPTION)"
+    !endif
+    !insertmacro MUI_DESCRIPTION_TEXT ${SectionShred}        "$(SECTION_INTEGRATE_SHRED_DESCRIPTION)"
+    !insertmacro MUI_DESCRIPTION_TEXT ${SectionUninstall}    "$(SECTION_UNINSTALL_DESCRIPTION)"
+  !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 ;--------------------------------
 ;Uninstaller Functions
@@ -457,4 +742,3 @@ Function un.onInit
   !insertmacro MUI_UNGETLANGUAGE
 
 FunctionEnd
-

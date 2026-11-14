@@ -1,0 +1,215 @@
+name: Windows build
+
+on:
+  push:
+    branches:
+      - '**'
+      - '!dependabot/**' # avoid duplicate runs; the pull_request event handles dependabot PRs
+    tags:
+      - 'v*' # release tags trigger the max-effort Windows build
+    paths-ignore: &paths-ignore
+      - '.gitignore'
+      - '.gitattributes'
+      - 'bleachbit.png'
+      - 'bleachbit.svg'
+      - 'bleachbit.spec'
+      - 'COPYING'
+      - 'debian/**'
+      - 'doc/**'
+      - 'docker/**'
+      - 'MANIFEST.in'
+      - 'org.bleachbit.BleachBit.desktop'
+      - 'org.bleachbit.BleachBit.metainfo.xml'
+      - 'org.bleachbit.policy'
+      - 'po/*.po' # translation strings
+      - 'po/*.pot' # translation template
+      - 'README.md'
+      - 'windows/NsisInclude/NsisMultiUserLang.nsh' # translation strings only
+  pull_request:
+    branches:
+      - '**'
+    paths-ignore: *paths-ignore
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded runs on PRs and feature branches, but let master and
+  # tags finish: their artifacts get deployed.
+  cancel-in-progress: ${{ github.ref_name != 'master' && github.ref_type != 'tag' }}
+
+jobs:
+  windows-build:
+    # When a tag is pushed at the same time as a branch push, they trigger racing
+    # builds with the same SHA but different build numbers, so different filenames
+    # in the deployment step (i.e., no overwriting risk). The tagged build has more
+    # optimizations, and we do not need both, so cancel the branch build: the more
+    # optimized files will be uploaded, instead.
+    # Push the branch first and wait a moment before pushing the tag.
+    concurrency:
+      group: ${{ github.workflow }}-windows-build-${{ github.sha }}
+      cancel-in-progress: ${{ github.ref_type == 'tag' }}
+    name: windows-build
+    timeout-minutes: 30
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.revision.outputs.version }}
+
+    env:
+      PYTHON_HOME: ${{ github.workspace }}\vcpkg_installed\x86-windows\tools\python3
+      PYTHON_EXE: ${{ github.workspace }}\vcpkg_installed\x86-windows\tools\python3\python.exe
+      MSYS_BIN: C:\msys64\usr\bin
+      PIP_CACHE_DIR: ${{ github.workspace }}\.pip-cache
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache downloaded dependencies
+        # zizmor: ignore[cache-poisoning] every archive here is SHA256-verified after restore
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            gtk*-x86-windows.7z
+            gtk-themes.zip
+            pygobject-*-win32.whl
+            nsis-*-setup.exe
+            advancecomp.zip
+          key: win-build-deps-${{ hashFiles('.github/workflows/build_and_test.yaml', 'windows/install-build-tools.ps1', 'windows/python-gtk3-deps.lst', 'windows/python-gtk3-install.ps1') }}
+
+      - name: Cache pip packages
+        # Skipped for tags: requirements are version-pinned but not hash-pinned,
+        # so a poisoned pip cache could reach a released installer.
+        if: github.ref_type != 'tag'
+        # zizmor: ignore[cache-poisoning] releases build with a cold pip cache, see above
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}\.pip-cache
+          # The build job installs only requirements.txt + windows/requirements.txt
+          # (test deps are installed in the test matrix), so the cache key excludes
+          # requirements-test.txt to avoid spurious misses when a test dep bumps.
+          key: pip-win-build-${{ hashFiles('requirements.txt', 'windows/requirements.txt') }}
+          # Fall back to the most recent pip cache when a requirements bump
+          # invalidates the exact key, so unchanged wheels are reused instead
+          # of being re-downloaded from PyPI.
+          restore-keys: pip-win-
+
+      - name: Install Python and GTK
+        shell: pwsh
+        run: .\windows\python-gtk3-install.ps1
+
+      - name: Install NSIS and AdvanceCOMP
+        # AdvanceCOMP (advzip) is used in the NSIS build setup for releases (tags).
+        shell: pwsh
+        run: .\windows\install-build-tools.ps1 -AdvanceComp:($env:GITHUB_REF_TYPE -eq 'tag')
+
+      - name: Generate Revision.py
+        uses: $/.github/actions/generate-revision
+
+      - name: Get version
+        id: revision
+        shell: pwsh
+        run: |
+          $version = & $env:PYTHON_EXE -c "from bleachbit.SystemInformation import get_version; print(get_version())"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Generate translations
+        shell: cmd # zizmor: ignore[misfeature] this step's script is written in cmd/batch syntax
+        run: |
+          set PATH=%MSYS_BIN%;%PATH%
+          make PYTHON="%PYTHON_EXE%" -C po local
+
+      - name: Build executable and installers
+        shell: cmd # zizmor: ignore[misfeature] this step's script is written in cmd/batch syntax
+        # The English-only installer is built only for tags (releases) to save
+        # the cost of GHA minutes and storage.
+        # PR builds pass 'fast' (skips the library.zip repack)
+        # since windows-deploy never ships PR-triggered artifacts.
+        # Tagged builds pass 'max-effort' (enables advzip zopfli recompression
+        # and the English-only installer).
+        env:
+          SETUP_ARGS: ${{ github.event_name == 'pull_request' && 'fast' || (github.ref_type == 'tag' && 'max-effort' || '') }}
+        run: |
+          set PATH=%MSYS_BIN%;%PATH%
+          "%PYTHON_EXE%" -u -m windows.setup %SETUP_ARGS%
+          move windows\BleachBit*.exe .
+          move windows\BleachBit*.zip .
+
+      - name: Show artifact sizes and hashes
+        shell: pwsh
+        run: |
+          Get-ChildItem BleachBit-* -File | ForEach-Object {
+            "{0,15:N0} bytes  {1}  {2}" -f $_.Length, $_.Name, (Get-FileHash $_.FullName).Hash
+          }
+
+      - name: Upload build artifacts (core)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-build-${{ steps.revision.outputs.version }}
+          if-no-files-found: error
+          # The installer and the portable zip are already compressed
+          compression-level: 0
+          path: |
+            BleachBit-*-setup.exe
+            BleachBit-*-portable.zip
+
+      - name: Upload build artifacts (English installer)
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-build-english-${{ steps.revision.outputs.version }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            BleachBit-*-setup-English.exe
+
+  windows-deploy:
+    needs: [windows-build]
+    # Eligible for deployment:
+    # - Any branch push in bleachbit/bleachbit
+    # - Tags
+    # - workflow_dispatch
+    # - No pull requests, whether from a fork or the same repository
+    # - No Dependabot branches: GitHub Actions withholds repository secrets
+    #   from workflows triggered by Dependabot, so the S3 upload would fail.
+    # needs.windows-build.result == 'success' guards against tagged build
+    # cancelled by the job-level concurrency group.
+    if: needs.windows-build.result == 'success' && github.repository == 'bleachbit/bleachbit' && github.event_name != 'pull_request' && !startsWith(github.ref_name, 'dependabot/')
+    runs-on: windows-latest
+    timeout-minutes: 5
+    env:
+      VERSION: ${{ needs.windows-build.outputs.version }}
+
+    steps:
+      # Only the deploy script, from the same commit as this workflow
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: windows/deploy-ci.ps1
+          sparse-checkout-cone-mode: false
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-build-${{ needs.windows-build.outputs.version }}
+          merge-multiple: true
+
+      - name: Download English installer artifact
+        if: github.ref_type == 'tag'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-build-english-${{ needs.windows-build.outputs.version }}
+          merge-multiple: true
+
+      - name: Deploy Windows build
+        shell: pwsh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
+          AWS_BUCKET_NAME: ${{ secrets.AWS_BUCKET_NAME }}
+        run: .\windows\deploy-ci.ps1

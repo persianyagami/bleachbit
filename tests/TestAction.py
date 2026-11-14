@@ -1,37 +1,35 @@
-# vim: ts=4:sw=4:expandtab
-# coding=utf-8
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 
 """
 Test cases for module Action
 """
 
-from bleachbit.Action import *
-from tests import common
-
+# standard imports
+import logging
+import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
-import mock
+import xml.parsers.expat
+from unittest import mock
 from xml.dom.minidom import parseString
+from xml.sax.saxutils import quoteattr
+
+# first party imports
+from bleachbit import IS_WINDOWS, IS_POSIX, IS_LINUX, FS_CASE_SENSITIVE, logger
+from bleachbit.Action import ActionProvider, ChromeOrphanedFrameworkVersions, Command, Delete, Process, has_glob, expand_multi_var
+from bleachbit.CleanerML import CleanerML
+from bleachbit.FileUtilities import close_delete_parent_lock
+from tests import common
+from tests.TestFileUtilities import ini_helper
+from tests.TestFileUtilities import json_helper
 
 
 def _action_str_to_commands(action_str):
@@ -39,8 +37,7 @@ def _action_str_to_commands(action_str):
     dom = parseString(action_str)
     action_node = dom.childNodes[0]
     delete = Delete(action_node)
-    for cmd in delete.get_commands():
-        yield cmd
+    yield from delete.get_commands()
 
 
 def _action_str_to_results(action_str):
@@ -51,10 +48,10 @@ def _action_str_to_results(action_str):
     return [next(cmd.execute(False)) for cmd in _action_str_to_commands(action_str)]
 
 
-def benchmark_filter(this_filter):
+def benchmark_filter(filter_type):
     """Measure how fast listing files is with and without filter"""
     n_files = 100000
-    print('benchmark of %d files' % n_files)
+    logger.info('benchmark of %d files', n_files)
 
     # make a directory with many files
     dirname = tempfile.mkdtemp(prefix='bleachbit-action-bench')
@@ -62,21 +59,19 @@ def benchmark_filter(this_filter):
         common.touch_file(os.path.join(dirname, str(x)))
 
     # scan directory
-    import time
     start = time.time()
     filter_code = ''
-    if 'regex' == this_filter:
+    if 'regex' == filter_type:
         # This regex matches everything, so the "no filter" and regex
         # are comparable
         filter_code = 'regex="."'
-    action_str = '<action command="delete" search="glob" path="%s/*" %s />' % \
-        (dirname, filter_code)
-    results = _action_str_to_results(action_str)
+    action_str = f'<action command="delete" search="glob" path="{dirname}/*" {filter_code} />'
+    _action_str_to_results(action_str)
     end = time.time()
     elapsed_seconds = end - start
     rate = n_files / elapsed_seconds
-    print('filter %s: elapsed: %.2f seconds, %.2f files/second' %
-          (this_filter, elapsed_seconds, rate))
+    logger.info('filter %s: elapsed: %.2f seconds, %.2f files/second',
+                filter_type, elapsed_seconds, rate)
 
     # clean up
     shutil.rmtree(dirname)
@@ -93,12 +88,15 @@ class ActionTestCase(common.BleachbitTestCase):
 
     """Test cases for Action"""
 
-    _TEST_PROCESS_CMDS = {'nt': 'cmd.exe /c dir', 'posix': 'dir'}
-    _TEST_PROCESS_SIMPLE = '<action command="process" cmd="%s" />'
+    _TEST_PROCESS_CMD = 'cmd.exe /c dir' if IS_WINDOWS else 'dir'
+    _TEST_PROCESS_SIMPLE = '<action command="process" cmd={cmd} />'
 
     def _test_action_str(self, action_str, expect_exists=True):
         """Parse <action> and test it"""
-        dom = parseString(action_str)
+        try:
+            dom = parseString(action_str)
+        except xml.parsers.expat.ExpatError as e:
+            self.fail(f"parse error: {action_str}: {e}")
         action_node = dom.childNodes[0]
         command = action_node.getAttribute('command')
         filename = action_node.getAttribute('path')
@@ -111,7 +109,7 @@ class ActionTestCase(common.BleachbitTestCase):
         for cmd in provider.get_commands():
             self.assertIsInstance(
                 cmd, (Command.Delete, Command.Ini, Command.Json, Command.Function))
-            if 'process' != command and not has_glob(filename) and expect_exists:
+            if command not in ('process', 'process.terminate') and not has_glob(filename) and expect_exists:
                 # process does not have a filename
                 self.assertLExists(filename)
             # preview
@@ -119,34 +117,56 @@ class ActionTestCase(common.BleachbitTestCase):
             common.validate_result(self, result)
             self.assertNotEqual('/', result['path'])
             # delete
-            ret = next(cmd.execute(really_delete=True))
+            next(cmd.execute(really_delete=True))
             if 'delete' == command:
                 self.assertNotLExists(cmd.path)
             elif 'truncate' == command:
                 self.assertLExists(filename)
                 os.remove(filename)
                 self.assertNotLExists(filename)
-            elif command in 'process':
+            elif command in ('process', 'process.terminate'):
                 pass
             elif command in ('ini', 'json'):
                 self.assertLExists(filename)
             else:
-                raise RuntimeError("Unknown command '%s'" % command)
+                raise RuntimeError(f'Unknown command {command}')
         if 'walk.all' == search:
             if expect_exists:
                 self.assertTrue(dir_is_empty(
-                    filename), 'directory not empty after walk.all: %s' % filename)
+                    filename), f'directory not empty after walk.all: {filename}')
+
+    def test_plugins_by_key_matches_plugin_scan(self):
+        """plugins_by_key agrees with a linear scan of the plugins"""
+        keys = {p.action_key for p in ActionProvider.plugins
+                if getattr(p, 'action_key', None) is not None}
+        self.assertTrue(keys)
+        for key in keys:
+            expected = None
+            for plugin in ActionProvider.plugins:
+                if getattr(plugin, 'action_key', None) == key:
+                    # no break: the old scan let the last match win
+                    expected = plugin
+            self.assertIs(
+                ActionProvider.plugins_by_key.get(key), expected, key)
+
+    def test_plugins_by_key_indexes_late_registration(self):
+        """A provider defined after bleachbit.Action is imported is indexed"""
+        class LateRegisteredAction(ActionProvider):
+            action_key = 'test.late.registration'
+
+        self.assertIs(ActionProvider.plugins_by_key.get('test.late.registration'),
+                      LateRegisteredAction)
 
     def test_delete(self):
         """Unit test for class Delete"""
         paths = ['~']
-        if 'nt' == os.name:
+        if IS_WINDOWS:
             # Python 2.6 and later supports %foo%
             paths.append('%USERPROFILE%')
             # Python 2.5 and later supports $foo
             paths.append('${USERPROFILE}')
             paths.append('$USERPROFILE')
-        if 'posix' == os.name:
+        elif IS_POSIX:
             paths.append('$HOME')
         for path in paths:
             for mode in ('delete', 'truncate', 'delete_forward'):
@@ -156,15 +176,14 @@ class ActionTestCase(common.BleachbitTestCase):
                 command = mode
                 if 'delete_forward' == mode:
                     # forward slash needs to be normalized on Windows
-                    if 'nt' == os.name:
+                    if IS_WINDOWS:
                         command = 'delete'
                         filename = filename.replace('\\', '/')
                     else:
                         # test not needed on this OS
                         os.remove(filename)
                         continue
-                action_str = '<action command="%s" search="file" path="%s" />' % \
-                    (command, filename)
+                action_str = f'<action command="{command}" search="file" path="{filename}" />'
                 self._test_action_str(action_str)
                 self.assertNotExists(filename)
 
@@ -177,7 +196,7 @@ class ActionTestCase(common.BleachbitTestCase):
         ]
         for test in tests:
             pathname = self.write_file(test)
-            action_str = '<action command="delete" search="file" path="%s" />' % pathname
+            action_str = f'<action command="delete" search="file" path="{pathname}" />'
             self._test_action_str(action_str)
             self.assertNotExists(pathname)
 
@@ -219,6 +238,37 @@ class ActionTestCase(common.BleachbitTestCase):
             actual = expand_multi_var(input_str, variables)
             self.assertSequenceEqual(actual, expected)
 
+    def test_windows_system_var(self):
+        """Unit test for expanding %WindowsSystem% in action paths."""
+        action_xml = (
+            r'<action command="delete" search="file" '
+            r'path="%WindowsSystem%\foo.log"/>'
+        )
+        action_node = parseString(action_xml).childNodes[0]
+        expanded = [r'C:\Windows\Sysnative\foo.log',
+                    r'C:\Windows\SysWOW64\foo.log']
+        with mock.patch('bleachbit.Action.IS_WINDOWS', True), \
+                mock.patch('bleachbit.Action.Windows', create=True) as mock_windows:
+            mock_windows.expand_windows_system_vars.return_value = expanded
+            action = Delete(action_node)
+        self.assertEqual(expanded, action.paths)
+        mock_windows.expand_windows_system_vars.assert_called_once_with(
+            r'%WindowsSystem%\foo.log')
+
+    def test_duplicate_var_paths(self):
+        """Var values that expand to the same path are listed once"""
+        action_node = parseString(
+            '<action command="delete" search="file" path="$$base$$/foo"/>').childNodes[0]
+        config_dir = os.path.expanduser('~/.config')
+        with common.set_temporary_env('XDG_CONFIG_HOME', config_dir):
+            action = Delete(action_node, {
+                'base': ['$XDG_CONFIG_HOME/app', '~/.config/app', '~/snap/app']})
+        expected = [os.path.expanduser(p)
+                    for p in ('~/.config/app/foo', '~/snap/app/foo')]
+        if IS_WINDOWS:
+            expected = [os.path.normpath(p) for p in expected]
+        self.assertEqual(expected, action.paths)
+
     def test_has_glob(self):
         """Unit test for function has_glob()"""
         tests = ((r'c:\windows\*.log', True),
@@ -227,47 +277,95 @@ class ActionTestCase(common.BleachbitTestCase):
                  (r'c:\windows\temp[abc].log', True))
         for (test_input, test_expected) in tests:
             test_actual = has_glob(test_input)
-            test_msg = 'test input: %s, expected: %s, actual: %s' % (
-                test_input, test_expected, test_actual)
+            test_msg = f'test input: {test_input}, expected: {test_expected}, actual: {test_actual}'
             self.assertEqual(test_actual, test_expected, test_msg)
 
     def test_ini(self):
         """Unit test for class Ini"""
-        from tests.TestFileUtilities import test_ini_helper
-
         def execute_ini(path, section, parameter):
             effective_parameter = ""
             if parameter is not None:
-                effective_parameter = 'parameter="%s"' % parameter
-            action_str = '<action command="ini" search="file" path="%s" section="%s" %s />' \
-                % (path, section, effective_parameter)
+                effective_parameter = f'parameter="{parameter}"'
+            action_str = (
+                '<action command="ini" search="file" '
+                f'path="{path}" section="{section}" {effective_parameter} />'
+            )
             self._test_action_str(action_str)
 
-        test_ini_helper(self, execute_ini)
+        ini_helper(self, execute_ini)
 
     def test_json(self):
         """Unit test for class Json"""
-        from tests.TestFileUtilities import test_json_helper
-
         def execute_json(path, address):
-            action_str = '<action command="json" search="file" path="%s" address="%s" />' \
-                % (path, address)
+            action_str = (
+                '<action command="json" search="file" '
+                f'path="{path}" address="{address}" />'
+            )
             self._test_action_str(action_str)
 
-        test_json_helper(self, execute_json)
+        json_helper(self, execute_json)
 
     def test_process(self):
         """Unit test for process action"""
         tests = [ActionTestCase._TEST_PROCESS_SIMPLE,
-                 '<action command="process" wait="false" cmd="%s" />',
-                 '<action command="process" wait="f" cmd="%s" />',
-                 '<action command="process" wait="no" cmd="%s" />',
-                 '<action command="process" wait="n" cmd="%s" />'
+                 '<action command="process" cmd={cmd} wait="{wait}" />',
                  ]
 
-        for test in tests:
-            self._test_action_str(
-                test % ActionTestCase._TEST_PROCESS_CMDS[os.name])
+        if IS_WINDOWS:
+            cmds = [
+                'ping /?',
+                '%windir%\\System32\\ping.exe /?',
+                '"%windir%\\System32\\ping.exe" /?',
+            ]
+        else:
+            ls_flag = '-l'
+            cmds = ['ls', f'ls {ls_flag}', f'/bin/ls {ls_flag}', '/bin/ls']
+        for cmd in cmds:
+            cmd_qa = quoteattr(cmd)
+            for wait in ('true', 't', 'false', 'f', 'no', 'n'):
+                for test in tests:
+                    self._test_action_str(test.format(cmd=cmd_qa, wait=wait))
+
+    def test_process_with_space(self):
+        """Test process action with space in command"""
+        # This is a regression test for a bug where spaces in commands were not handled correctly
+        delete_me = self.write_file('delete me.txt')
+        if IS_WINDOWS:
+            cmd = f'cmd /c del "{delete_me}"'
+        else:
+            delete_me_escaped = delete_me.replace(" ", "\\ ")
+            cmd = f'rm {delete_me_escaped}'
+        cmd_qa = quoteattr(cmd)
+        action_str = f'<action command="process" cmd={cmd_qa} wait="true" />'
+        self._test_action_str(action_str)
+        self.assertNotExists(delete_me)
+
+    def test_process_space(self):
+        """Unit test for process action with space in path
+
+        https://github.com/bleachbit/bleachbit/pull/871
+        """
+        fn = os.path.join(self.tempdir, 'file with space.txt')
+        common.touch_file(fn)
+        if IS_WINDOWS:
+            cmd = f'cmd /c del &quot;{fn}&quot;'
+        else:
+            fn_for_cmd = fn.replace(" ", "\\ ")
+            cmd = f'rm {fn_for_cmd}'
+        action_str = f'<action command="process" wait="true" cmd="{cmd}" />'
+        self._test_action_str(action_str)
+        self.assertNotExists(fn)
+
+    def test_process_unbalanced_quote(self):
+        """A command line that cannot be split raises RuntimeError"""
+        action_node = parseString(
+            '<action command="process" cmd="foo &quot;bar" />').childNodes[0]
+        cmd = next(Process(action_node).get_commands())
+        with mock.patch('bleachbit.Action.General.run_external') as mock_run:
+            with self.assertRaises(RuntimeError) as context:
+                cmd.func()
+        mock_run.assert_not_called()
+        self.assertIn('No closing quotation', str(context.exception))
 
     def test_process_unicode_stderr(self):
         """
@@ -279,73 +377,103 @@ class ActionTestCase(common.BleachbitTestCase):
             # If exception occurs in logger `handleError` is called.
             with mock.patch.object(logging.Handler, 'handleError') as MockHandleError:
                 try:
-                    # When GtkLoggerHandler is used the exeptions are raised directly
+                    # When GtkLoggerHandler is used the exceptions are raised directly
                     # and handleError is not called
                     self._test_action_str(
-                        ActionTestCase._TEST_PROCESS_SIMPLE % ActionTestCase._TEST_PROCESS_CMDS[os.name])
+                        ActionTestCase._TEST_PROCESS_SIMPLE.format(cmd=quoteattr(ActionTestCase._TEST_PROCESS_CMD)))
                 except UnicodeDecodeError:
                     self.fail(
                         "test_process_unicode_stderr() raised UnicodeDecodeError unexpectedly!")
                 else:
                     MockHandleError.assert_not_called()
 
+    def test_process_terminate(self):
+        """Unit test for process.terminate action"""
+        with mock.patch('bleachbit.Process.terminate_process', return_value=[1234]) as mock_term:
+            self._test_action_str(
+                '<action command="process.terminate" name="explorer.exe" />')
+            mock_term.assert_called_once_with('explorer.exe', True)
+
+        with mock.patch('bleachbit.Process.terminate_process', return_value=[]) as mock_term:
+            self._test_action_str(
+                '<action command="process.terminate" name="explorer.exe" same_user="false" />')
+            mock_term.assert_called_once_with('explorer.exe', False)
+
+        for bad_action in (
+            '<action command="process.terminate" />',
+            '<action command="process.terminate" name="" />',
+            '<action command="process.terminate" name="explorer.exe" same_user="1" />',
+        ):
+            with self.subTest(bad_action=bad_action), \
+                    self.assertRaises(RuntimeError):
+                _action_str_to_results(bad_action)
+
     def test_regex(self):
         """Unit test for regex option"""
-        _iglob = glob.iglob
-        glob.iglob = lambda x: ['/tmp/foo1', '/tmp/foo2', '/tmp/bar1']
-        _getsize = FileUtilities.getsize
-        FileUtilities.getsize = lambda x: 1
+        with mock.patch('glob.iglob', lambda x: ['/tmp/foo1', '/tmp/foo2', '/tmp/bar1']), \
+                mock.patch('bleachbit.FileUtilities.getsize', lambda x: 1):
+            # should match three files using no regexes
+            action_str = '<action command="delete" search="glob" path="/tmp/foo*" />'
+            results = _action_str_to_results(action_str)
+            self.assertEqual(len(results), 3)
 
-        # should match three files using no regexes
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" />'
-        results = _action_str_to_results(action_str)
-        self.assertEqual(len(results), 3)
-
-        # should match second file using positive regex
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" regex="^foo2$"/>'
-        results = _action_str_to_results(action_str)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['path'], '/tmp/foo2')
-
-        # On Windows should be case insensitive
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" regex="^FOO2$"/>'
-        results = _action_str_to_results(action_str)
-        if 'nt' == os.name:
+            # should match second file using positive regex
+            action_str = '<action command="delete" search="glob" path="/tmp/foo*" regex="^foo2$"/>'
+            results = _action_str_to_results(action_str)
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0]['path'], '/tmp/foo2')
-        else:
+
+            # On case-insensitive filesystems (Windows, macOS) the regex
+            # should match case-insensitively.
+            action_str = '<action command="delete" search="glob" path="/tmp/foo*" regex="^FOO2$"/>'
+            results = _action_str_to_results(action_str)
+            if FS_CASE_SENSITIVE:
+                self.assertEqual(len(results), 0)
+            else:
+                self.assertEqual(len(results), 1)
+                self.assertEqual(results[0]['path'], '/tmp/foo2')
+
+            # should match second file using negative regex
+            action_str = (
+                '<action command="delete" search="glob" '
+                'path="/tmp/foo*" nregex="^(foo1|bar1)$"/>'
+            )
+            results = _action_str_to_results(action_str)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]['path'], '/tmp/foo2')
+
+            # should match second file using both regexes
+            action_str = (
+                '<action command="delete" search="glob" '
+                'path="/tmp/foo*" regex="^f" nregex="1$"/>'
+            )
+            results = _action_str_to_results(action_str)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]['path'], '/tmp/foo2')
+
+            # should match nothing using positive regex
+            action_str = (
+                '<action command="delete" search="glob" '
+                'path="/tmp/foo*" regex="^bar$"/>'
+            )
+            results = _action_str_to_results(action_str)
             self.assertEqual(len(results), 0)
 
-        # should match second file using negative regex
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" nregex="^(foo1|bar1)$"/>'
-        results = _action_str_to_results(action_str)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['path'], '/tmp/foo2')
+            # should match nothing using negative regex
+            action_str = (
+                '<action command="delete" search="glob" '
+                'path="/tmp/foo*" nregex="."/>'
+            )
+            results = _action_str_to_results(action_str)
+            self.assertEqual(len(results), 0)
 
-        # should match second file using both regexes
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" regex="^f" nregex="1$"/>'
-        results = _action_str_to_results(action_str)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['path'], '/tmp/foo2')
-
-        # should match nothing using positive regex
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" regex="^bar$"/>'
-        results = _action_str_to_results(action_str)
-        self.assertEqual(len(results), 0)
-
-        # should match nothing using negative regex
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" nregex="."/>'
-        results = _action_str_to_results(action_str)
-        self.assertEqual(len(results), 0)
-
-        # should give an error
-        action_str = '<action command="delete" search="invalid" path="/tmp/foo*" regex="^bar$"/>'
-        self.assertRaises(
-            RuntimeError, lambda: _action_str_to_results(action_str))
-
-        # clean up
-        glob.iglob = _iglob
-        FileUtilities.getsize = _getsize
+            # should give an error
+            action_str = (
+                '<action command="delete" search="invalid" '
+                'path="/tmp/foo*" regex="^bar$"/>'
+            )
+            self.assertRaises(
+                RuntimeError, lambda: _action_str_to_results(action_str))
 
     def test_search_glob(self):
         """Unit test for search=glob"""
@@ -360,40 +488,45 @@ class ActionTestCase(common.BleachbitTestCase):
                  os.path.join(self.tempdir, 'a?????g'),
                  os.path.join(self.tempdir, '[a-z]b?d*'))
         for test in tests:
-            print('search="glob" test: %s' % test)
-            pathname = self.write_file(fname)
-            self.assertExists(pathname)
-            action_str = '<action command="delete" search="glob" path="%s" />' % test
-            self._test_action_str(action_str)
-            self.assertNotExists(pathname)
+            with self.subTest(test=test):
+                pathname = self.write_file(fname)
+                self.assertExists(pathname)
+                action_str = (
+                    '<action command="delete" search="glob" '
+                    f'path="{test}" />'
+                )
+                self._test_action_str(action_str)
+                self.assertNotExists(pathname)
 
     def test_wholeregex(self):
         """Unit test for wholeregex filter"""
-        _iglob = glob.iglob
-        glob.iglob = lambda x: ['/tmp/foo1', '/tmp/foo2', '/tmp/bar1']
-        _getsize = FileUtilities.getsize
-        FileUtilities.getsize = lambda x: 1
+        with mock.patch('glob.iglob', lambda x: ['/tmp/foo1', '/tmp/foo2', '/tmp/bar1']), \
+                mock.patch('bleachbit.FileUtilities.getsize', lambda x: 1):
+            # should match three files using no regexes
+            action_str = (
+                '<action command="delete" search="glob" '
+                'path="/tmp/foo*" />'
+            )
+            results = _action_str_to_results(action_str)
+            self.assertEqual(len(results), 3)
 
-        # should match three files using no regexes
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" />'
-        results = _action_str_to_results(action_str)
-        self.assertEqual(len(results), 3)
+            # should match two files using wholeregex
+            action_str = (
+                '<action command="delete" search="glob" '
+                'path="/tmp/foo*" wholeregex="^/tmp/foo.*$"/>'
+            )
+            results = _action_str_to_results(action_str)
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0]['path'], '/tmp/foo1')
 
-        # should match two files using wholeregex
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" wholeregex="^/tmp/foo.*$"/>'
-        results = _action_str_to_results(action_str)
-        self.assertEqual(len(results), 2)
-        self.assertEqual(results[0]['path'], '/tmp/foo1')
-
-        # should match third file using nwholeregex
-        action_str = '<action command="delete" search="glob" path="/tmp/foo*" nwholeregex="^/tmp/foo.*$"/>'
-        results = _action_str_to_results(action_str)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['path'], '/tmp/bar1')
-
-        # clean up
-        glob.iglob = _iglob
-        FileUtilities.getsize = _getsize
+            # should match third file using nwholeregex
+            action_str = (
+                '<action command="delete" search="glob" '
+                'path="/tmp/foo*" nwholeregex="^/tmp/foo.*$"/>'
+            )
+            results = _action_str_to_results(action_str)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]['path'], '/tmp/bar1')
 
     def test_type(self):
         """Unit test for type attribute"""
@@ -402,37 +535,51 @@ class ActionTestCase(common.BleachbitTestCase):
 
         # this should not delete anything
         common.touch_file(filename)
-        action_str = '<action command="delete" search="file" type="d" path="%s" />' % filename
+        action_str = f'<action command="delete" search="file" type="d" path="{filename}" />'
         self._test_action_str(action_str)
         self.assertExists(filename)
 
         # should delete file
-        action_str = '<action command="delete" search="file" type="f" path="%s" />' % filename
+        action_str = f'<action command="delete" search="file" type="f" path="{filename}" />'
         self._test_action_str(action_str)
         self.assertNotExists(filename)
 
         # should delete file
         common.touch_file(filename)
-        action_str = '<action command="delete" search="file" path="%s" />' % filename
+        action_str = f'<action command="delete" search="file" path="{filename}" />'
         self._test_action_str(action_str)
         self.assertNotExists(filename)
 
         # should not delete anything
-        action_str = '<action command="delete" search="file" type="f" path="%s" />' % dirname
+        action_str = f'<action command="delete" search="file" type="f" path="{dirname}" />'
         self._test_action_str(action_str)
         self.assertExists(dirname)
 
         # should delete directory
-        action_str = '<action command="delete" search="file" type="d" path="%s" />' % dirname
+        action_str = f'<action command="delete" search="file" type="d" path="{dirname}" />'
         self._test_action_str(action_str)
         self.assertNotExists(dirname)
+
+    def test_type_invalid(self):
+        """An unknown type must not silently disable the filter"""
+        for object_type in ('', 'file', 'F'):
+            action_str = f'<action command="delete" search="file" type="{object_type}" path="{self.tempdir}" />'
+            with self.subTest(object_type=object_type), \
+                    self.assertRaises(RuntimeError):
+                _action_str_to_results(action_str)
+
+    def test_skip_open_non_deep_invalid(self):
+        """skip_open is rejected when search is not deep"""
+        action_str = f'<action command="delete" search="file" skip_open="true" path="{self.tempdir}" />'
+        with self.assertRaises(RuntimeError):
+            _action_str_to_results(action_str)
 
     def test_walk_all_top(self):
         """Unit test for walk.all and walk.top"""
 
         variants = ('all', 'top')
         for variant in variants:
-            dirname = self.mkdtemp(prefix='bleachbit-walk-%s' % variant)
+            dirname = self.mkdtemp(prefix=f'bleachbit-walk-{variant}')
 
             # this sub-directory should be deleted
             subdir = os.path.join(dirname, 'sub')
@@ -443,12 +590,12 @@ class ActionTestCase(common.BleachbitTestCase):
             filename = os.path.join(subdir, 'file')
             common.touch_file(filename)
 
-            action_str = '<action command="delete" search="walk.%s" path="%s" />' % (
-                variant, dirname)
+            action_str = f'<action command="delete" search="walk.{variant}" path="{dirname}" />'
             self._test_action_str(action_str)
             self.assertNotExists(subdir)
             if variant == 'all':
                 self.assertExists(dirname)
+                close_delete_parent_lock()
                 os.rmdir(dirname)
             elif variant == 'top':
                 self.assertNotExists(dirname)
@@ -459,35 +606,125 @@ class ActionTestCase(common.BleachbitTestCase):
 
     def test_walk_files(self):
         """Unit test for walk.files"""
-        paths = {'posix': '/var', 'nt': '$WINDIR\\system32'}
+        path = r'$WINDIR\system32' if IS_WINDOWS else '/var'
 
-        action_str = '<action command="delete" search="walk.files" path="%s" />' % paths[os.name]
+        action_str = f'<action command="delete" search="walk.files" path="{path}" />'
         results = 0
         for cmd in _action_str_to_commands(action_str):
             result = next(cmd.execute(False))
             common.validate_result(self, result)
             path = result['path']
-            self.assertFalse(os.path.isdir(path), "%s is a directory" % path)
+            self.assertFalse(os.path.isdir(path), f'{path} is a directory')
             results += 1
         self.assertGreater(results, 0)
 
+    def test_walk_files_cache_survives_early_abandon(self):
+        """An abandoned walk.files generator must not poison the cache"""
+        dirname = self.mkdtemp(prefix='bleachbit-walk-cache')
+        filenames = [os.path.join(dirname, f'file{i}') for i in range(3)]
+        for filename in filenames:
+            common.touch_file(filename)
 
-def suite():
-    return unittest.makeSuite(ActionTestCase)
+        action_str = f'<action command="delete" search="walk.files" path="{dirname}" />'
+
+        # Abandon after the first result, like Cleaner.auto_hide() does
+        commands = _action_str_to_commands(action_str)
+        next(commands)
+        del commands
+
+        # A fresh walk of the same path must still see every file
+        results = [next(cmd.execute(False))['path']
+                   for cmd in _action_str_to_commands(action_str)]
+        self.assertEqual(sorted(results), sorted(filenames))
+
+    def test_walk_files_cache_hit_keeps_other_paths(self):
+        """A walk.files cache hit on one path still walks the others"""
+        dirs = [self.mkdtemp(prefix=f'bleachbit-walk-cache{i}')
+                for i in range(2)]
+        filenames = [os.path.join(dirname, 'file') for dirname in dirs]
+        for filename in filenames:
+            common.touch_file(filename)
+        multi = Delete(parseString(
+            '<action command="delete" search="walk.files" path="$$d$$" />'
+        ).childNodes[0], {'d': dirs})
+        self.assertEqual(len(multi.paths), 2)
+
+        # Leave the first path of multi in the cache
+        list(_action_str_to_commands(
+            '<action command="delete" search="walk.files" '
+            f'path={quoteattr(multi.paths[0])} />'))
+        results = [cmd.path for cmd in multi.get_commands()]
+        self.assertEqual(sorted(results), sorted(filenames))
+
+    def test_package_manager_missing(self):
+        """Unit test for when package manager is not installed"""
+        with mock.patch('bleachbit.Language.setup_translation', return_value=None), \
+                mock.patch('bleachbit.FileUtilities.exe_exists', return_value=False), \
+                mock.patch('bleachbit.Unix.exe_exists', return_value=False):
+            # APT is excluded because it includes walk.all.
+            for cleaner_name in ['snap', 'pacman', 'yum', 'dnf']:
+                # Reset run_external mock for each test.
+                with self.subTest(cleaner_name=cleaner_name), mock.patch('bleachbit.General.run_external') as mock_run_external:
+                    cleaner = CleanerML(
+                        f'cleaners/{cleaner_name}.xml').get_cleaner()
+                    # Cleaner remains usable because the action is registered, but it should auto-hide.
+                    self.assertEqual(IS_LINUX, cleaner.is_usable())
+                    self.assertTrue(cleaner.auto_hide())
+                    mock_run_external.assert_not_called()
+
+    @common.skipUnlessMac
+    def test_chrome_orphaned_framework_versions_delegates_to_unix(self):
+        """ChromeOrphanedFrameworkVersions.get_commands() must delegate
+        to Unix.orphaned_framework_versions() and wrap each yielded path
+        in a Command.Delete, and must yield nothing at all on
+        non-macOS platforms (where bleachbit.Unix may not even be
+        importable)."""
+        # search="file" only registers a path get_paths() will later
+        # yield if it exists on disk, so a real (but empty) temp
+        # directory stands in for a genuine Versions/ folder.
+        versions_dir = self.mkdtemp(prefix='bleachbit-test-versions')
+        action_xml = (
+            f'<action command="macos.orphaned_framework_versions" '
+            f'search="file" path="{versions_dir}"/>')
+        action_node = parseString(action_xml).childNodes[0]
+        action = ChromeOrphanedFrameworkVersions(action_node)
+
+        fake_orphans = [f'{versions_dir}/150.0.1.1/file.txt',
+                        f'{versions_dir}/150.0.1.1']
+        with mock.patch('bleachbit.Action.IS_MAC', True), \
+                mock.patch('bleachbit.Action.Unix.orphaned_framework_versions',
+                           return_value=iter(fake_orphans)) as mock_orphans:
+            commands = list(action.get_commands())
+
+        mock_orphans.assert_called_once_with(versions_dir)
+        self.assertEqual([c.path for c in commands], fake_orphans)
+        self.assertTrue(all(isinstance(c, Command.Delete) for c in commands))
+
+        with mock.patch('bleachbit.Action.IS_MAC', False), \
+                mock.patch('bleachbit.Action.Unix.orphaned_framework_versions') as mock_orphans_win:
+            commands = list(action.get_commands())
+
+        self.assertEqual(commands, [])
+        mock_orphans_win.assert_not_called()
 
 
-if __name__ == '__main__':
+def main():
+    """Main function"""
     if 1 < len(sys.argv) and 'benchmark' == sys.argv[1]:
         for this_filter in ['none', 'regex']:
             rates = []
             iterations = 1
             if 3 == len(sys.argv):
                 iterations = int(sys.argv[2])
-            for x in range(0, iterations):
+            for _x in range(0, iterations):
                 rate = benchmark_filter(this_filter)
                 rates.append(rate)
             # combine all the rates for easy copy and paste into R for analysis
-            print('rates for filter %s=%s' %
-                  (this_filter, ','.join([str(rate) for rate in rates])))
+            print(
+                f'rates for filter {this_filter}={",".join([str(rate) for rate in rates])}')
         sys.exit()
     unittest.main()
+
+
+if __name__ == '__main__':
+    main()

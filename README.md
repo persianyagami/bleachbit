@@ -4,11 +4,17 @@ BleachBit cleans files to free disk space and to maintain privacy.
 
 ## Running from source
 
-To run BleachBit without installation, unpack the tarball and then run these
-commands:
+To run BleachBit without installation, first install the system dependencies,
+then build the translations and run it:
 
-    make -C po local # build translations
-    python3 bleachbit.py
+```sh
+make install-deps       # runtime deps (auto-detects Debian/Fedora/openSUSE/Arch)
+make -C po local        # build translations
+python3 bleachbit.py
+```
+
+Many Linux systems have the basic dependencies: you may skip installation,
+but in case of any issues, please check for missing dependencies.
 
 Then, review the preferences.
 
@@ -16,15 +22,25 @@ Then, select some options, and click Preview.  Review the files, toggle options 
 
 For information regarding the command line interface, run:
 
-     python3 bleachbit.py --help
+```sh
+python3 bleachbit.py --help
+```
+
+Read more about [running from source](https://docs.bleachbit.org/dev/running-from-source-code.html).
 
 ## Links
 
-* [BleachBit home 
-page](https://www.bleachbit.org)
+* [BleachBit home page](https://www.bleachbit.org)
 * [Support](https://www.bleachbit.org/help)
 * [Documentation](https://docs.bleachbit.org)
 
+## Localization
+
+Read [translation documentation](https://www.bleachbit.org/contribute/translate) or translate now in [Weblate](https://hosted.weblate.org/projects/bleachbit/), a web-based translation platform.
+
+<a href="https://hosted.weblate.org/engage/bleachbit/">
+      <img src="https://hosted.weblate.org/widgets/bleachbit/-/multi-auto.svg" alt="Translation status"/>
+</a>
 
 ## Licenses
 
@@ -32,9 +48,39 @@ BleachBit itself, including source code and cleaner definitions, is licensed und
 
 markovify is licensed under the [MIT License](https://github.com/jsvine/markovify/blob/master/LICENSE.txt).
 
-### Development
-* [BleachBit on AppVeyor](https://ci.appveyor.com/project/az0/bleachbit)  [![Build status](https://ci.appveyor.com/api/projects/status/7p8amofd7rv7n268?svg=true)](https://ci.appveyor.com/project/az0/bleachbit)
-* [BleachBit on Travis CI](https://travis-ci.org/bleachbit/bleachbit)  [![Build Status](https://travis-ci.org/bleachbit/bleachbit.svg?branch=master)](https://travis-ci.org/bleachbit/bleachbit)
+## Development
+
+To develop, run the test suite, or build packages, install the
+extra build/test/lint/packaging tools too:
+
+```sh
+make install-deps-dev
+```
+
+Common commands include:
+
+```sh
+make tests   # run tests
+make lint    # check .py and .sh files for issues
+make pretty  # format .py and .xml files
+```
+
+More resources:
+
+* [![Tests](https://img.shields.io/github/actions/workflow/status/bleachbit/bleachbit/tests.yml?branch=master&label=Tests)](https://github.com/bleachbit/bleachbit/actions/workflows/tests.yml)
+* [![Windows build](https://img.shields.io/github/actions/workflow/status/bleachbit/bleachbit/build_and_test.yaml?branch=master&label=Windows%20build)](https://github.com/bleachbit/bleachbit/actions/workflows/build_and_test.yaml)
+* [![Coverage](https://img.shields.io/coverallsCoverage/github/bleachbit/bleachbit?branch=master)](https://coveralls.io/github/bleachbit/bleachbit?branch=master)
 * [CleanerML Repository](https://github.com/bleachbit/cleanerml)
 * [BleachBit Miscellaneous Repository](https://github.com/bleachbit/bleachbit-misc)
 * [Winapp2.ini Repository](https://github.com/bleachbit/winapp2.ini)
+
+### Docker-based Linux builds
+
+The `docker/build.sh` script sets up a container, runs `make tests`,
+and builds packages for a selected distribution. Usage:
+
+```sh
+./docker/build.sh <distro> # distro is one of {debian, fedora, opensuse}
+```
+
+Artifacts are copied to `./docker-artifacts/<distro>` on the host.

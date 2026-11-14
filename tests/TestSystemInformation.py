@@ -1,0 +1,302 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
+#
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
+
+
+"""
+Test case for module SystemInformation
+"""
+
+import datetime
+import os
+import re
+import types
+from unittest import mock
+
+
+from tests import common
+import bleachbit
+from bleachbit import IS_POSIX, FS_SCAN_RE_FLAGS
+from bleachbit.SystemInformation import (NOTICE_AFTER_DAYS, anonymize_system_information,
+                                         get_build_age_days, get_build_date, get_outdated_build_notice,
+                                         get_system_information, get_version)
+
+
+class SystemInformationTestCase(common.BleachbitTestCase):
+    """Test Case for module SystemInformation"""
+
+    def test_get_system_information(self):
+        """Test get_system_information"""
+        # at least it does not crash
+        ret = get_system_information()
+        self.assertIsString(ret)
+
+    def test_get_system_information_mac_version_name(self):
+        """macOS dropped the '10.' version prefix starting with 11
+        (Big Sur), so the release name must be looked up by the FIRST
+        version component for modern versions, falling back to the
+        second component only for the old '10.x' scheme. A modern
+        version's second component must never be misread as an old-
+        scheme release code (e.g. '26.6.2' must show 'Tahoe', not
+        misread the '6' as the old code for 'Snow Leopard')."""
+        cases = {
+            '26.6.2': 'Tahoe',
+            '15.1.0': 'Sequoia',
+            '14.0': 'Sonoma',
+            '10.15.7': 'Catalina',
+            '10.6.8': 'Snow Leopard',
+            '10.6': 'Snow Leopard',
+        }
+        for version, expected_name in cases.items():
+            with mock.patch('platform.mac_ver', return_value=(version, ('', '', ''), '')), \
+                    mock.patch('bleachbit.SystemInformation.IS_MAC', True), \
+                    mock.patch('bleachbit.SystemInformation.IS_LINUX', False):
+                ret = get_system_information()
+            self.assertIn(
+                f'platform.mac_ver() = {version} ({expected_name})', ret,
+                f'version {version} should show {expected_name}')
+
+    def test_get_system_information_mac_version_unknown_codename(self):
+        """Unknown codename still shows the raw version number"""
+        with mock.patch('platform.mac_ver', return_value=('99.0', ('', '', ''), '')), mock.patch('bleachbit.SystemInformation.IS_MAC', True), mock.patch('bleachbit.SystemInformation.IS_LINUX', False):
+            ret = get_system_information()
+        self.assertIn('platform.mac_ver() = 99.0\n', ret)
+
+    def test_get_system_information_revision(self):
+        """Test that Git revision appears in get_system_information when Revision module exists."""
+        fake_revision_mod = mock.MagicMock()
+        fake_revision_mod.revision = 'abcd1234'
+        with mock.patch.dict('sys.modules', {'bleachbit.Revision': fake_revision_mod}):
+            ret = get_system_information()
+        self.assertIn('Git revision = abcd1234\n', ret)
+
+    @common.skipUnlessWindows
+    def test_get_system_information_invalid_unicode_userprofile(self):
+        invalid_userprofile = 'C:\\Users\\invalid\ud803'
+        original_getenv = os.getenv
+
+        def getenv(name, default=None):
+            if name == 'USERPROFILE':
+                return invalid_userprofile
+            return original_getenv(name, default)
+
+        with mock.patch('bleachbit.SystemInformation.os.getenv', side_effect=getenv):
+            ret = get_system_information()
+
+        encoded = ret.encode('utf-8')
+        self.assertIn(b'C:\\Users\\invalid\\ud803', encoded)
+
+    def test_get_version(self):
+        """Test get_version"""
+        ret = get_version()
+        self.assertIsString(ret)
+        # check it is in a.b.c.d or a.b.c format
+        self.assertRegex(ret, r'^\d+\.\d+\.\d+(\.\d+)?$')
+        ret = get_version(four_parts=True)
+        self.assertIsString(ret)
+        # check it is in a.b.c.d format
+        self.assertRegex(ret, r'^\d+\.\d+\.\d+\.\d+$')
+
+    def test_get_build_date(self):
+        """Test get_build_date() with and without a Revision stamp"""
+        # No Revision module: date unknown. The from-import returns an
+        # existing package attribute without importing, so drop it too.
+        saved = bleachbit.__dict__.pop('Revision', None)
+        try:
+            with mock.patch.dict('sys.modules', {'bleachbit.Revision': None}):
+                self.assertIsNone(get_build_date())
+        finally:
+            if saved is not None:
+                bleachbit.Revision = saved
+        # Revision without build_date: date unknown.
+        fake_revision = types.ModuleType('bleachbit.Revision')
+        with mock.patch('bleachbit.Revision', fake_revision, create=True):
+            self.assertIsNone(get_build_date())
+        # build_date of the wrong type: date unknown.
+        fake_revision.build_date = 20261026
+        with mock.patch('bleachbit.Revision', fake_revision, create=True):
+            self.assertIsNone(get_build_date())
+        # Malformed build_date: date unknown.
+        fake_revision.build_date = 'not a date'
+        with mock.patch('bleachbit.Revision', fake_revision, create=True):
+            self.assertIsNone(get_build_date())
+        # Valid ISO build_date.
+        fake_revision.build_date = '2026-10-26'
+        with mock.patch('bleachbit.Revision', fake_revision, create=True):
+            self.assertEqual(get_build_date(), datetime.date(2026, 10, 26))
+
+    def test_get_build_age_days(self):
+        """Test get_build_age_days() including unknown and future dates"""
+        with mock.patch('bleachbit.SystemInformation.get_build_date', return_value=None):
+            self.assertIsNone(get_build_age_days())
+        old_date = datetime.date.today() - datetime.timedelta(days=10)
+        with mock.patch('bleachbit.SystemInformation.get_build_date', return_value=old_date):
+            self.assertEqual(get_build_age_days(), 10)
+        # A build date in the future (clock skew) counts as fresh.
+        future_date = datetime.date.today() + datetime.timedelta(days=10)
+        with mock.patch('bleachbit.SystemInformation.get_build_date', return_value=future_date):
+            self.assertEqual(get_build_age_days(), 0)
+
+    def test_get_outdated_build_notice(self):
+        """Test get_outdated_build_notice() around the age threshold"""
+        with mock.patch('bleachbit.SystemInformation.get_build_date', return_value=None):
+            self.assertIsNone(get_outdated_build_notice())
+        # At the threshold there is no notice yet.
+        threshold = datetime.date.today() - datetime.timedelta(days=NOTICE_AFTER_DAYS)
+        with mock.patch('bleachbit.SystemInformation.get_build_date', return_value=threshold):
+            self.assertIsNone(get_outdated_build_notice())
+        # One day past the threshold the notice appears.
+        old = threshold - datetime.timedelta(days=1)
+        with mock.patch('bleachbit.SystemInformation.get_build_date', return_value=old):
+            notice = get_outdated_build_notice()
+            self.assertIsString(notice)
+            self.assertIn('more than a year', notice)
+            self.assertIn('bleachbit.org', notice)
+
+    def test_get_system_information_build_date(self):
+        """A stamped build date appears in the system information"""
+        build_date = datetime.date(2026, 10, 26)
+        with mock.patch('bleachbit.SystemInformation.get_build_date', return_value=build_date):
+            ret = get_system_information()
+        self.assertIn('Build date = 2026-10-26', ret)
+
+    @common.skipIfWindows
+    def test_anonymize_system_information_posix_non_root(self):
+        """Test anonymization on POSIX with a non-root home directory."""
+        home_dir = os.path.expanduser('~')
+        if home_dir in ('/root', '/'):
+            self.skipTest('requires a non-root POSIX home directory')
+
+        test_input = f"""BleachBit version = 5.1.0
+local_cleaners_dir = {home_dir}/.local/share/bleachbit/cleaners
+options_dir = {home_dir}/.config/bleachbit
+os.getenv(LOGNAME) = testuser
+os.getenv(USER) = testuser
+os.getenv(SUDO_UID) = 1000"""
+
+        result = anonymize_system_information(test_input)
+
+        self.assertIn(
+            'local_cleaners_dir = ~/.local/share/bleachbit/cleaners', result)
+        self.assertIn('options_dir = ~/.config/bleachbit', result)
+        self.assertNotIn(home_dir, result)
+        self.assertNotIn(home_dir.lower(), result.lower())
+        self.assertIn('os.getenv(LOGNAME) = *non-root*', result)
+        self.assertIn('os.getenv(USER) = *non-root*', result)
+        self.assertIn('os.getenv(SUDO_UID) = 1000', result)
+
+    @common.skipUnlessWindows
+    def test_anonymize_system_information_windows(self):
+        """Test anonymization on Windows with environment variables."""
+        home_dir = os.path.expanduser('~')
+        test_input = f"""os.getenv(APPDATA) = {home_dir.upper()}\\AppData\\Roaming
+os.getenv(USERPROFILE) = {home_dir.lower()}
+os.getenv(LocalAppData) = {home_dir}\\AppData\\Local"""
+
+        result = anonymize_system_information(test_input)
+
+        self.assertIn(
+            'os.getenv(APPDATA) = %userprofile%\\AppData\\Roaming', result)
+        self.assertIn(
+            'os.getenv(USERPROFILE) = %userprofile%', result)
+        self.assertIn(
+            'os.getenv(LocalAppData) = %userprofile%\\AppData\\Local', result)
+        self.assertIsNone(re.search(re.escape(home_dir),
+                          result, flags=FS_SCAN_RE_FLAGS))
+
+    @common.skipUnlessWindows
+    def test_anonymize_system_information_windows_short_path(self):
+        """Test anonymization handles Windows short (8.3) paths."""
+        # Create a directory with Unicode characters that will have a short path
+        username = '我可以喝漂白剂而不伤及自身'
+        unicode_dir = self.mkdir(username)
+
+        short_path = None
+        try:
+            import win32api
+            short_path = win32api.GetShortPathName(unicode_dir)
+        except (ImportError, OSError):
+            self.skipTest('win32api not available or short path not supported')
+
+        if short_path == unicode_dir:
+            self.skipTest('Short path generation not enabled on this system')
+
+        self.assertTrue(os.path.samefile(unicode_dir, short_path))
+
+        with mock.patch('bleachbit.SystemInformation.os.path.expanduser', return_value=unicode_dir):
+            from bleachbit.SystemInformation import _get_home_dirs_to_anonymize
+            home_dirs = _get_home_dirs_to_anonymize()
+
+        self.assertIn(short_path, home_dirs)
+        self.assertTrue(os.path.samefile(home_dirs[0], home_dirs[1]))
+
+        test_input = f"os.getenv(TMP) = {short_path}\\AppData\\Local\\Temp"
+        with mock.patch('bleachbit.SystemInformation._get_home_dirs_to_anonymize',
+                        return_value=[unicode_dir, short_path]):
+            anonymized = anonymize_system_information(test_input)
+
+        self.assertIn('%userprofile%', anonymized)
+        self.assertNotIn(username, anonymized)
+        self.assertNotIn(short_path, anonymized)
+        self.assertNotIn(unicode_dir, anonymized)
+
+    def test_anonymize_system_information_preserves_non_sensitive_data(self):
+        """Test that non-sensitive data remains unchanged during anonymization."""
+        test_unchanged = """BleachBit version = 5.1.0
+gi.version = 3.55.0
+GTK version = 3.24.51"""
+
+        result = anonymize_system_information(test_unchanged)
+        self.assertEqual(test_unchanged, result)
+
+    def test_anonymize_system_information_preserves_root(self):
+        """Root username should not be mislabeled as non-root."""
+        test_input = """BleachBit version = 5.1.0
+local_cleaners_dir = /root/.local/share/bleachbit/cleaners
+options_dir = /root/.config/bleachbit
+personal_cleaners_dir = /root/.config/bleachbit/cleaners
+os.getenv(LOGNAME) = root
+os.getenv(USER) = root
+os.getenv(SUDO_UID) = 1000
+os.path.expanduser("~") = /root"""
+        result = anonymize_system_information(test_input)
+        self.assertEqual(test_input, result)
+
+    def test_anonymize_system_information_masks_real_home_dir(self):
+        """Preserve /root while anonymizing the real non-root home directory."""
+        # Mixing /root and user-specific paths is a normal scenario when
+        # running from source `sudo python3 bleachbit.py`.
+        test_input = """personal_cleaners_dir = /root/.config/bleachbit/cleaners
+system_cleaners_dir = /home/regularuser/software/bleachbit/cleaners
+__file__ = /home/regularuser/software/bleachbit/bleachbit/SystemInformation.py"""
+        home_token = '~' if IS_POSIX else '%userprofile%'
+
+        with mock.patch('bleachbit.SystemInformation._get_home_dirs_to_anonymize',
+                        return_value=['/home/regularuser']):
+            result = anonymize_system_information(test_input)
+
+        self.assertIn(
+            f'system_cleaners_dir = {home_token}/software/bleachbit/cleaners', result)
+        self.assertIn(
+            f'__file__ = {home_token}/software/bleachbit/bleachbit/SystemInformation.py', result)
+        self.assertNotIn('/home/regularuser', result)
+
+    def test_anonymize_preserves_structure(self):
+        """Test that anonymization preserves the structure of system information"""
+        # This is the only anonymization test with the real get_system_information().
+        original = get_system_information()
+        anonymized = anonymize_system_information(original)
+
+        # Both should have the same number of lines
+        self.assertEqual(len(original.split('\n')),
+                         len(anonymized.split('\n')))
+
+        # Both should have the same number of equal signs (key-value delimiters)
+        self.assertEqual(original.count(' = '), anonymized.count(' = '))
+
+        # Both should be non-empty strings
+        self.assertIsString(original)
+        self.assertIsString(anonymized)
+        self.assertGreater(len(anonymized), 0)

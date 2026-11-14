@@ -1,0 +1,401 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
+#
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
+
+"""
+Cookie module for selective deletion of cookies
+"""
+
+import contextlib
+import json
+import logging
+import os
+import time
+
+import bleachbit
+from bleachbit import FileUtilities, IS_MAC
+from bleachbit.FileUtilities import SQLITE_BUSY_TIMEOUT
+from bleachbit.Special import (
+    _sqlite_connect_readonly, _sqlite_uri, sqlite_table_exists)
+
+logger = logging.getLogger(__name__)
+
+COOKIE_KEEP_LIST_FILENAME = "cookie_keep_list.json"
+SQLITE_BUSY = 5
+SQLITE_LOCKED = 6
+
+
+def _keep_host_func(keep_list):
+    """Return a function telling whether a cookie host is kept.
+
+    A host is kept when it is a kept domain or one of its subdomains.
+    Doing this in SQL takes a term per domain, and a long keep list then
+    exceeds SQLite's expression depth limit.
+    """
+    domains = {str(d).lstrip('.').lower() for d in keep_list}
+
+    def keep_host(host):
+        if not isinstance(host, str):
+            return False
+        labels = host.lstrip('.').lower().split('.')
+        return any('.'.join(labels[i:]) in domains for i in range(len(labels)))
+    return keep_host
+
+
+def _estimate_in_memory_size(conn, table_name, delete_query, keep_host):
+    """Return estimated database size (bytes) after deleting rows in-memory.
+
+    Args:
+        conn: SQLite database connection
+        table_name (str): Name of the table being modified
+        delete_query (str): SQL DELETE query to execute
+        keep_host (function): The keep_host() SQL function the query calls
+
+    Returns:
+        int or None: Estimated size in bytes after deletion, or None if estimation fails
+    """
+    mem_conn = None
+    try:
+        # In FreeBSD, sqlite3 is a separate package
+        import sqlite3
+        mem_conn = sqlite3.connect(':memory:')
+        mem_conn.create_function('keep_host', 1, keep_host)
+        deadline = time.monotonic() + SQLITE_BUSY_TIMEOUT
+
+        def check_backup_timeout(status, _remaining, _total):
+            if status in (SQLITE_BUSY, SQLITE_LOCKED) \
+                    and time.monotonic() >= deadline:
+                raise sqlite3.OperationalError('database is locked')
+
+        conn.backup(mem_conn, progress=check_backup_timeout, sleep=0.05)
+        mem_cursor = mem_conn.cursor()
+        mem_cursor.execute(delete_query)
+        mem_conn.commit()
+
+        mem_conn.isolation_level = None
+        mem_cursor.execute('VACUUM')
+        page_count = mem_cursor.execute('PRAGMA page_count').fetchone()[0]
+        page_size = mem_cursor.execute('PRAGMA page_size').fetchone()[0]
+        return page_count * page_size
+    except sqlite3.Error as exc:
+        logger.debug(
+            'In-memory size estimation failed for %s: %s', table_name, exc)
+        return None
+    finally:
+        if mem_conn:
+            mem_conn.close()
+
+
+def _get_db_disk_size(path):
+    """Return total on-disk footprint for a SQLite DB, including WAL/SHM."""
+    total = 0
+    for suffix in ('', '-wal', '-shm'):
+        candidate = f"{path}{suffix}"
+        if not os.path.exists(candidate):
+            continue
+        try:
+            total += FileUtilities.getsize(candidate)
+        except OSError as exc:
+            logger.debug('Failed to get size for %s: %s', candidate, exc)
+    return total
+
+
+def _checkpoint_wal(conn, path):
+    """Checkpoint and truncate WAL to keep disk footprint accurate."""
+    import sqlite3
+    prev_isolation = conn.isolation_level
+    try:
+        conn.isolation_level = None
+        busy, _, _ = conn.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+        if busy:
+            logger.warning(
+                'WAL checkpoint is busy for %s; deleted cookie data may remain in the WAL',
+                path)
+    except sqlite3.Error as exc:
+        logger.warning('WAL checkpoint failed for %s: %s', path, exc)
+    finally:
+        conn.isolation_level = prev_isolation
+
+
+def _delete_auxiliary_journal_files(path, shred_enabled):
+    """Delete SQLite auxiliary files (-wal/-shm) if present."""
+    for suffix in ('-wal', '-shm'):
+        candidate = f"{path}{suffix}"
+        if not os.path.exists(candidate):
+            continue
+        try:
+            FileUtilities.delete(candidate, shred_enabled)
+        except OSError as exc:
+            logger.debug('Failed to delete %s: %s', candidate, exc)
+
+
+# SQLite table configurations for different cookie databases
+SQLITE_TABLES = {
+    'moz_cookies': {
+        'table_name': 'moz_cookies',
+        'host_column': 'host'
+    },
+    'cookies': {
+        'table_name': 'cookies',
+        'host_column': 'host_key'
+    }
+}
+
+
+def detect_browser(path):
+    """Detect the browser type based on the cookies database file"""
+    if not os.path.exists(path):
+        raise ValueError(f"cookies file not found: {path}")
+    for table_config in SQLITE_TABLES.values():
+        if sqlite_table_exists(path, table_config['table_name']):
+            return table_config['table_name'], table_config['host_column']
+    raise ValueError(f"invalid cookies file: {path}")
+
+
+def list_cookies(path):
+    """List cookies in the database"""
+    if IS_MAC:
+        from bleachbit.Mac import is_safari_binarycookies, list_safari_cookies
+        if is_safari_binarycookies(path):
+            return [(domain,) for domain in list_safari_cookies(path)]
+
+    import sqlite3
+    (table_name, host_column) = detect_browser(path)
+    uri = _sqlite_uri(path)
+    with contextlib.closing(sqlite3.connect(
+            uri, uri=True, timeout=SQLITE_BUSY_TIMEOUT)) as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT distinct {host_column} FROM {table_name}")
+        return cursor.fetchall()
+
+
+def load_keep_list():
+    """Load cookie domains to keep from options directory.
+
+    This does not swallow file permission error, JSON parsing errors or
+    a file that is not a list of strings: when cleaning, these cases
+    should not be treated equally to an empty keep list.
+    """
+    path = os.path.join(bleachbit.options_dir, COOKIE_KEEP_LIST_FILENAME)
+    domains = set()
+    try:
+        # utf-8-sig accepts a BOM added by an editor
+        with open(path, 'r', encoding='utf-8-sig') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return domains
+
+    if not isinstance(data, list):
+        raise ValueError(f'expected a list, got {type(data).__name__}')
+    for item in data:
+        if not isinstance(item, str):
+            raise ValueError(f'expected a string, got {type(item).__name__}')
+        domain = item.strip().lstrip('.').lower()
+        if domain:
+            domains.add(domain)
+    return domains
+
+
+def delete_cookies(path, keep_list, really_delete=False):
+    """Process cookies with optional deletion based on keep list
+
+    Args:
+        path (str): Path to the cookies database file
+        keep_list (set): Set of hosts to preserve (must not be empty)
+        really_delete (bool): If True, perform actual deletion. If False, only preview.
+
+    Returns:
+        dict: Results dictionary with deletion statistics
+
+    Raises:
+        ValueError: If keep_list is empty
+    """
+    if not keep_list:
+        raise ValueError("keep_list must not be empty")
+    assert isinstance(keep_list, set)
+
+    if IS_MAC:
+        from bleachbit.Mac import is_safari_binarycookies, delete_safari_cookies
+        if is_safari_binarycookies(path):
+            return delete_safari_cookies(path, keep_list, really_delete=really_delete)
+
+    from bleachbit.Options import options
+    shred_enabled = options.get('shred')
+
+    import sqlite3
+    # Find the first matching table configuration
+    (table_name, host_column) = detect_browser(path)
+
+    original_size = _get_db_disk_size(path)
+    if original_size <= 0:
+        raise RuntimeError(f"cookies database is empty: {path}")
+
+    # Set up connection. Preview opens read-only (with a read-write
+    # fallback for WAL databases whose -shm file is gone); the
+    # percent-encoded URI keeps a '?' in the path from defeating the mode.
+    try:
+        if really_delete:
+            conn = sqlite3.connect(
+                _sqlite_uri(path), uri=True, timeout=SQLITE_BUSY_TIMEOUT)
+        else:
+            conn = _sqlite_connect_readonly(path)
+        with contextlib.closing(conn) as conn:
+            cursor = conn.cursor()
+            if shred_enabled:
+                cursor.execute('PRAGMA secure_delete = ON;')
+
+            # Get total count
+            total_before = cursor.execute(
+                f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+
+            # Match exact domain and any subdomain (both Firefox and Chromium)
+            keep_host = _keep_host_func(keep_list)
+            conn.create_function('keep_host', 1, keep_host)
+
+            # Count cookies that will be kept
+            kept_count = cursor.execute(
+                f"SELECT COUNT(*) FROM {table_name} WHERE keep_host({host_column})"
+            ).fetchone()[0]
+
+            deleted_count = total_before - kept_count
+            delete_query = f"DELETE FROM {table_name} WHERE NOT keep_host({host_column})"
+
+            ratio_estimate = 0
+            delete_whole_file = kept_count == 0 and cursor.execute(
+                'PRAGMA journal_mode').fetchone()[0] != 'wal'
+
+            if really_delete and deleted_count > 0:
+                if delete_whole_file:
+                    # No cookies are being kept: delete the whole database file
+                    conn.close()
+                    if shred_enabled:
+                        _delete_auxiliary_journal_files(path, True)
+                    FileUtilities.delete(path, shred_enabled)
+                    return {
+                        "total_deleted": deleted_count,
+                        "total_kept": 0,
+                        "skipped": False,
+                        "whole_file_deleted": True,
+                        "file_size_reduction": original_size,
+                    }
+
+                # Perform actual deletion: delete anything NOT matching keep predicate
+                cursor.execute(delete_query)
+                # Commit deletion before VACUUM
+                conn.commit()
+                # Run VACUUM in autocommit mode to avoid 'cannot VACUUM from within a transaction'
+                prev_isolation = conn.isolation_level
+                try:
+                    conn.isolation_level = None
+                    cursor.execute('VACUUM')
+                except sqlite3.Error as e:
+                    logger.warning("VACUUM failed on %s: %s", path, e)
+                finally:
+                    conn.isolation_level = prev_isolation
+                if shred_enabled:
+                    _checkpoint_wal(conn, path)
+                conn.close()
+                new_size = _get_db_disk_size(path)
+                size_reduction = original_size - new_size
+                estimation_method = 'actual'
+                ratio_estimate = None
+                memory_estimate = None
+            else:
+                # Preview mode or nothing to delete
+                if delete_whole_file and deleted_count > 0:
+                    # No cookies being kept: entire file would be deleted
+                    size_reduction = original_size
+                    estimation_method = 'whole_file'
+                    ratio_estimate = None
+                    memory_estimate = None
+                else:
+                    if total_before > 0:
+                        ratio_estimate = int(
+                            (deleted_count / total_before) * original_size)
+                    memory_estimate = None
+                    if deleted_count > 0 and shred_enabled:
+                        # In-memory method is accurate when shredding is enabled
+                        memory_size = _estimate_in_memory_size(
+                            conn, table_name, delete_query, keep_host)
+                        if memory_size is not None:
+                            memory_estimate = max(
+                                0, original_size - memory_size)
+
+                    if memory_estimate is not None:
+                        size_reduction = memory_estimate
+                        estimation_method = 'in_memory'
+                    else:
+                        size_reduction = ratio_estimate
+                        estimation_method = 'ratio'
+
+            return {
+                "total_deleted": deleted_count,
+                "total_kept": kept_count,
+                "skipped": False,
+                "whole_file_deleted": False,
+                "file_size_reduction": size_reduction,
+                "file_size_estimation_method": estimation_method,
+                "file_size_reduction_ratio": ratio_estimate,
+                "file_size_reduction_in_memory": memory_estimate,
+            }
+
+    except sqlite3.Error as e:
+        if really_delete:
+            raise
+        logger.error("SQLite error processing %s: %s", path, e)
+        return {
+            "total_deleted": 0,
+            "total_kept": 0,
+            "skipped": True,
+            "whole_file_deleted": False,
+            "file_size_reduction": 0,
+        }
+
+
+def list_unique_cookies():
+    """Return unique cookie hostnames across all cleaners with cookie actions.
+
+    Iterates through every registered cleaner, locates actions whose
+    ``command="cookie"`` and aggregates the existing cookie database files
+    they target.  Each database is opened using :func:`list_cookies`, and the
+    distinct host entries are returned as a sorted list.
+
+    Returns:
+        list[str]: Sorted, de-duplicated list of cookie host strings.
+    """
+
+    import sqlite3
+    cookie_files = set()
+    # Import backends here to avoid a circular import.
+    from bleachbit.Cleaner import backends as cleaner_backends
+    # This runs in a thread while the GUI may clear and refill backends.
+    for cleaner in list(cleaner_backends.values()):
+        actions = getattr(cleaner, 'actions', ())
+        for option_id, action in actions:
+            if getattr(action, 'action_key', None) != 'cookie':
+                continue
+            try:
+                paths = list(action.get_paths())
+            except (OSError, RuntimeError) as exc:
+                logger.debug('Unable to enumerate cookie paths for %s.%s: %s',
+                             cleaner.get_id(), option_id, exc)
+                continue
+            for path in paths:
+                if path and os.path.isfile(path):
+                    cookie_files.add(path)
+
+    unique_hosts = set()
+    for path in cookie_files:
+        try:
+            rows = list_cookies(path)
+        except (ValueError, sqlite3.Error, OSError) as exc:
+            logger.debug('Skipping cookie database %s: %s', path, exc)
+            continue
+        for row in rows:
+            host = row[0] if isinstance(row, (list, tuple)) else row
+            if host:
+                unique_hosts.add(str(host))
+
+    return sorted(unique_hosts)

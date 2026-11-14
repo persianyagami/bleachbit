@@ -1,0 +1,303 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
+#
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
+
+
+"""
+Show system information
+"""
+
+# standard library
+import datetime
+import logging
+import locale
+import os
+import platform
+import re
+import sys
+from collections import OrderedDict
+
+# local
+import bleachbit
+from bleachbit import IS_LINUX, IS_MAC, IS_POSIX, IS_WINDOWS
+from bleachbit.General import get_executable, get_real_uid
+from bleachbit.Language import get_text as _
+
+logger = logging.getLogger(__name__)
+
+# Show the outdated-build notice when the build is older than this many
+# days and no online update check confirmed it is current. The notice
+# wording says "more than a year old", so keep this near one year.
+NOTICE_AFTER_DAYS = 365
+
+
+def get_gtk_info():
+    """Get dictionary of information about GTK"""
+    from bleachbit.GtkShim import (
+        gi, Gtk, is_gtk_available, get_gtk_unavailable_reason)
+
+    info = {}
+    if gi is None:
+        logger.debug('gi module not available')
+        return info
+
+    if not hasattr(gi, 'version_info'):
+        logger.debug('gi.version_info not available')
+    else:
+        info['gi.version'] = gi.__version__
+
+    if not is_gtk_available():
+        logger.debug('GTK not available: %s', get_gtk_unavailable_reason())
+        return info
+
+    settings = Gtk.Settings.get_default()
+    if not settings:
+        logger.debug('GTK settings not found')
+        return info
+
+    info['GTK version'] = f"{Gtk.get_major_version()}.{Gtk.get_minor_version()}.{Gtk.get_micro_version()}"
+    info['GTK theme'] = settings.get_property('gtk-theme-name')
+    info['GTK icon theme'] = settings.get_property('gtk-icon-theme-name')
+    info['GTK prefer dark theme'] = settings.get_property(
+        'gtk-application-prefer-dark-theme')
+
+    return info
+
+
+def _get_home_dirs_to_anonymize():
+    """Return home directories that should be anonymized."""
+    home_dirs = []
+    home_dir = os.path.expanduser('~') or ''
+    home_dirs.append(home_dir)
+
+    if IS_POSIX:
+        try:
+            # reminder: pwd is not available on Windows
+            import pwd
+            real_home_dir = pwd.getpwuid(get_real_uid()).pw_dir
+        except (ImportError, KeyError, RuntimeError, ValueError):
+            real_home_dir = ''
+        home_dirs.append(real_home_dir)
+
+    if IS_WINDOWS:
+        # Windows may return short (8.3) paths for environment variables
+        # like TMP when the username contains Unicode characters.
+        # Include the short path form of the home directory to ensure
+        # anonymization covers both long and short path forms.
+        try:
+            import win32api
+            short_home_dir = win32api.GetShortPathName(home_dir)
+            if short_home_dir and short_home_dir != home_dir:
+                home_dirs.append(short_home_dir)
+        except (ImportError, OSError, ValueError) as e:
+            logger.debug('no short path for the home directory: %s', e)
+
+    # Filter out root directories and duplicates
+    filtered_dirs = []
+    for d in home_dirs:
+        if not d:
+            continue
+        if d in ('/', '/root'):
+            continue
+        if d not in filtered_dirs:
+            filtered_dirs.append(d)
+
+    return filtered_dirs
+
+
+def anonymize_system_information(text):
+    """Anonymize non-generic username in system information text.
+
+    root is not anonymized.
+    """
+    home_dirs = _get_home_dirs_to_anonymize()
+    home_token = '~' if IS_POSIX else '%userprofile%'
+
+    def mask_user_line(line):
+        """Mask username for environment variables"""
+        if not (line.startswith('os.getenv(LOGNAME)') or line.startswith('os.getenv(USER)')):
+            return line
+        key, _, value = line.partition(' = ')
+        if value and value != 'None' and value.strip() != 'root':
+            # replace specific non-root username with *non-root*
+            return f'{key} = *non-root*'
+        return line
+
+    anonymized_lines = []
+    for line in text.split('\n'):
+        for home_dir in home_dirs:
+            if IS_WINDOWS:
+                # Windows paths are case-insensitive
+                line = re.sub(re.escape(home_dir), home_token,
+                              line, flags=re.IGNORECASE)
+            else:
+                line = line.replace(home_dir, home_token)
+        anonymized_lines.append(mask_user_line(line))
+
+    return '\n'.join(anonymized_lines)
+
+
+def get_version(four_parts=False):
+    """Return version information as a string.
+
+    CI builds will have an integer build number.
+
+    If four_parts is True, always return a four-part version string.
+    If False, return three or four parts, depending on available information.
+    """
+    build_number_env = os.getenv('GITHUB_RUN_NUMBER')
+    try:
+        from bleachbit.Revision import build_number as build_number_src
+    except ImportError:
+        # Revision.py only exists in CI and tarball builds
+        build_number_src = None
+
+    build_number = build_number_src or build_number_env
+    if build_number and not str(build_number).isdigit():
+        logger.warning('ignoring non-numeric build number: %r', build_number)
+        build_number = None
+    if not build_number:
+        if not four_parts:
+            return bleachbit.APP_VERSION
+        return f'{bleachbit.APP_VERSION}.0'
+    return f'{bleachbit.APP_VERSION}.{build_number}'
+
+
+def get_build_date():
+    """Return the build date stamped into Revision.py, or None.
+
+    Official builds stamp build_date (ISO 8601, UTC) into
+    bleachbit/Revision.py. A missing or malformed value means the date
+    is unknown, such as a development checkout or a distro source build.
+    """
+    try:
+        from bleachbit import Revision
+    except ImportError:
+        return None
+    raw = getattr(Revision, 'build_date', None)
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.date.fromisoformat(raw)
+    except ValueError:
+        logger.warning('ignoring malformed build_date: %r', raw)
+        return None
+
+
+def get_build_age_days():
+    """Return the age of this build in days, or None if unknown.
+
+    A build date in the future (clock skew) counts as zero days.
+    """
+    build_date = get_build_date()
+    if build_date is None:
+        return None
+    return max(0, (datetime.date.today() - build_date).days)
+
+
+def get_outdated_build_notice():
+    """Return the outdated-build notice, or None when it does not apply.
+
+    The build is outdated when its age exceeds NOTICE_AFTER_DAYS. The
+    caller decides whether to show the notice: it is the offline
+    fallback for when no online update check confirmed the build is
+    current. The notice says "may be outdated" because the application
+    keeps working either way.
+    """
+    age_days = get_build_age_days()
+    if age_days is None or age_days <= NOTICE_AFTER_DAYS:
+        return None
+    # TRANSLATORS: Notice shown when the installed version is more than
+    # a year old and a newer version may exist. The application still
+    # works; this only suggests checking for a newer version. Keep the
+    # URL unchanged.
+    return _('This version of BleachBit is more than a year old. '
+             'We regularly release improvements and bug fixes. '
+             'You can check for a newer version at https://www.bleachbit.org.')
+
+
+def _escape_invalid_unicode(value):
+    return str(value).encode('utf-8', errors='backslashreplace').decode('utf-8')
+
+
+def get_system_information():
+    """Return system information as a string."""
+    info = OrderedDict()
+
+    # Application and library versions
+    info['BleachBit version'] = get_version()
+
+    try:
+        # CI builds and Linux tarball will have a revision.
+        from bleachbit.Revision import revision
+        info['Git revision'] = revision
+    except ImportError:
+        logger.debug('no Revision module, so no git revision to report')
+
+    build_date = get_build_date()
+    if build_date is not None:
+        info['Build date'] = build_date.isoformat()
+
+    info.update(get_gtk_info())
+
+    # Variables defined in __init__.py
+    info['local_cleaners_dir'] = bleachbit.local_cleaners_dir
+    info['locale_dir'] = bleachbit.locale_dir
+    info['options_dir'] = bleachbit.options_dir
+    info['personal_cleaners_dir'] = bleachbit.personal_cleaners_dir
+    info['system_cleaners_dir'] = bleachbit.system_cleaners_dir
+
+    # System environment information
+    info['locale.getlocale'] = str(locale.getlocale())
+
+    # Environment variables
+    if IS_POSIX:
+        envs = ('DESKTOP_SESSION', 'LOGNAME', 'USER', 'SUDO_UID')
+    elif IS_WINDOWS:
+        envs = ('APPDATA', 'cd', 'LocalAppData', 'LocalAppDataLow', 'Music',
+                'USERPROFILE', 'ProgramFiles', 'ProgramW6432', 'TMP', '__COMPAT_LAYER')
+    else:
+        envs = ()
+
+    for env in envs:
+        info[f'os.getenv({env})'] = os.getenv(env)
+
+    info['os.path.expanduser("~")'] = os.path.expanduser('~')
+
+    if IS_LINUX:
+        from bleachbit.Unix import get_distribution_name_version
+        info['get_distribution_name_version()'] = get_distribution_name_version()
+    elif IS_MAC:
+        if hasattr(platform, 'mac_ver'):
+            mac_version = platform.mac_ver()[0]
+            from bleachbit.Mac import macos_version_name
+            name = macos_version_name(mac_version)
+            # Always show the raw version, even when the codename is
+            # unknown (e.g. a macOS release newer than this codebase's
+            # MACOSX_DICT_MODERN, such as macOS 27.0 at the time of
+            # writing) -- previously this line was silently omitted
+            # from the report entirely whenever the codename lookup
+            # came up empty, hiding the version number itself along
+            # with the missing codename.
+            if name:
+                info['platform.mac_ver()'] = f'{mac_version} ({name})'
+            else:
+                info['platform.mac_ver()'] = mac_version
+    else:
+        info['platform.uname().version'] = platform.uname().version
+
+    # System information
+    info['sys.argv'] = sys.argv
+    info['sys.executable'] = get_executable()
+    info['sys.version'] = sys.version
+    if IS_WINDOWS:
+        from win32com.shell import shell
+        info['IsUserAnAdmin()'] = shell.IsUserAnAdmin()
+    info['__file__'] = __file__
+
+    # Render the information as a string
+    return '\n'.join(
+        f'{key} = {_escape_invalid_unicode(value)}'
+        for key, value in info.items())

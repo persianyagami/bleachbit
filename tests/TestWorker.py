@@ -1,49 +1,47 @@
-# vim: ts=4:sw=4:expandtab
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 
 """
 Test case for module Worker
 """
 
+import errno
+import os
+import sqlite3
+import tempfile
+import time
+from unittest import mock
 
 from tests import TestCleaner, common
-from bleachbit import CLI, Command
+from tests.TestFileUtilities import _open_blocking_handle
+import bleachbit
+from bleachbit import CLI, Command, FileUtilities
 from bleachbit.Action import ActionProvider
-from bleachbit.Worker import *
+from bleachbit.Cleaner import backends
+from bleachbit.Process import process_cache
+from bleachbit.Worker import Worker, format_minutes_remaining
 
-import os
-import tempfile
-import unittest
+if bleachbit.IS_WINDOWS:
+    import win32con
+    import win32file
 
 
 class AccessDeniedActionAction(ActionProvider):
     action_key = 'access.denied'
 
     def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
         self.pathname = action_element.getAttribute('path')
 
     def get_commands(self):
         # access denied, should fail and continue
         def accessdenied():
-            import errno
-            raise OSError(errno.EACCES, 'Permission denied: /foo/bar')
+            raise OSError(
+                errno.EACCES, 'Permission denied: c:\\access\\denied', 'c:\\access\\denied')
         yield Command.Function(None, accessdenied, 'Test access denied')
 
         # real file, should succeed
@@ -54,13 +52,41 @@ class DoesNotExistAction(ActionProvider):
     action_key = 'does.not.exist'
 
     def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
         self.pathname = action_element.getAttribute('path')
 
     def get_commands(self):
         # non-existent file, should fail and continue
-        yield Command.Delete("doesnotexist")
+        if bleachbit.IS_WINDOWS:
+            yield Command.Delete(r"c:\does\not\exist")
+        else:
+            yield Command.Delete("/does/not/exist")
 
         # real file, should succeed
+        yield Command.Delete(self.pathname)
+
+
+class ToctouAction(ActionProvider):
+    """Simulate a TOCTOU race: a file exists at listing time but vanishes before getsize()"""
+
+    action_key = 'toctou'
+    ghost_path = None  # stored for test cleanup
+
+    def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
+        self.pathname = action_element.getAttribute('path')
+
+    def get_commands(self):
+        # Create a file that physically exists at listing time.
+        # The test mocks getsize() to raise FileNotFoundError for it,
+        # simulating the file vanishing between listing and size check.
+        (fd, filename) = tempfile.mkstemp(
+            prefix='bleachbit-test-worker-toctou-')
+        os.close(fd)
+        ToctouAction.ghost_path = filename
+        yield Command.Delete(filename)
+
+        # Real file, should succeed even after the prior TOCTOU failure.
         yield Command.Delete(self.pathname)
 
 
@@ -68,6 +94,7 @@ class FunctionGeneratorAction(ActionProvider):
     action_key = 'function.generator'
 
     def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
         self.pathname = action_element.getAttribute('path')
 
     def get_commands(self):
@@ -84,11 +111,12 @@ class FunctionPathAction(ActionProvider):
     action_key = 'function.path'
 
     def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
         self.pathname = action_element.getAttribute('path')
 
     def get_commands(self):
         # function with path, should succeed
-        def pathfunc(path):
+        def pathfunc(_path):
             pass
         # self.pathname must exist because it checks the file size
         yield Command.Function(self.pathname, pathfunc, 'pathfunc')
@@ -101,6 +129,7 @@ class InvalidEncodingAction(ActionProvider):
     action_key = 'invalid.encoding'
 
     def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
         self.pathname = action_element.getAttribute('path')
 
     def get_commands(self):
@@ -117,6 +146,7 @@ class FunctionPlainAction(ActionProvider):
     action_key = 'function.plain'
 
     def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
         self.pathname = action_element.getAttribute('path')
 
     def get_commands(self):
@@ -134,21 +164,24 @@ class LockedAction(ActionProvider):
     action_key = 'locked'
 
     def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
         self.pathname = action_element.getAttribute('path')
 
     def get_commands(self):
-        # Open the file with a non-exclusive lock, so the file should
-        # be truncated and marked for deletion. This is checked just on
-        # on Windows.
-        fd = os.open(self.pathname, os.O_RDWR)
+        # Open the file with a blocking handle that allows read/write but blocks delete.
+        # This causes delete() to truncate and mark for deletion. Windows only.
+        # pylint: disable-next=possibly-used-before-assignment
+        share_mode = win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE
+        handle = _open_blocking_handle(self.pathname, share_mode)
         from bleachbit.FileUtilities import getsize
         # Without admin privileges, this delete fails.
         yield Command.Delete(self.pathname)
-        assert(os.path.exists(self.pathname))
+        assert os.path.exists(self.pathname)
         fsize = getsize(self.pathname)
-        if not fsize == 3:  # Contents is "123"
-            raise RuntimeError('Locked file has size %dB (not 3B)' % fsize)
-        os.close(fd)
+        if fsize != 0:  # File should be truncated to 0 bytes
+            raise RuntimeError('Locked file has size %dB (not 0B)' % fsize)
+        # pylint: disable-next=possibly-used-before-assignment
+        win32file.CloseHandle(handle)
 
         # Now that the file is not locked, admin privileges
         # are not required to delete it.
@@ -160,6 +193,7 @@ class RuntimeErrorAction(ActionProvider):
     action_key = 'runtime'
 
     def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
         self.pathname = action_element.getAttribute('path')
 
     def get_commands(self):
@@ -174,10 +208,10 @@ class RuntimeErrorAction(ActionProvider):
 
 
 class TruncateTestAction(ActionProvider):
-
     action_key = 'truncate.test'
 
     def __init__(self, action_element):
+        ActionProvider.__init__(self, action_element)
         self.pathname = action_element.getAttribute('path')
 
     def get_commands(self):
@@ -217,20 +251,114 @@ class WorkerTestCase(common.BleachbitTestCase):
         self.assertEqual(worker.total_errors, errors_expected,
                          'For command %s expecting %d errors but observed %d'
                          % (command, errors_expected, worker.total_errors))
-        if 'posix' == os.name:
+        if bleachbit.IS_POSIX:
             self.assertEqual(worker.total_bytes, bytes_expected_posix)
             self.assertEqual(worker.total_deleted, count_deleted_posix)
-        elif 'nt' == os.name:
+        elif bleachbit.IS_WINDOWS:
             self.assertEqual(worker.total_bytes, bytes_expected_nt)
             self.assertEqual(worker.total_deleted, count_deleted_nt)
 
+    def test_run_invalidates_process_cache(self):
+        """Each run rescans instead of reusing a cached process list"""
+        missing = os.path.join(self.tempdir, 'does-not-exist')
+        backends['test'] = TestCleaner.action_to_cleaner(
+            f'<action command="delete" search="file" path="{missing}"/>')
+        self.addCleanup(backends.pop, 'test', None)
+        process_cache.processes = ('stale',)
+        process_cache.last_scan_time = time.time()
+        self.addCleanup(process_cache.invalidate)
+
+        for _dummy in Worker(CLI.CliCallback(), True, {'test': ['option1']}).run():
+            pass
+
+        self.assertIsNone(process_cache.last_scan_time)
+        self.assertEqual(process_cache.processes, ())
+
+    def test_init_clears_path_spellings(self):
+        """A new worker forgets the path spellings of the last run"""
+        with mock.patch(
+                'bleachbit.FileUtilities.clear_path_spellings') as mock_clear:
+            Worker(CLI.CliCallback(), False, {'test': ['option1']})
+        mock_clear.assert_called_once_with()
+
+    def test_format_minutes_remaining(self):
+        """Test format_minutes_remaining() for issue #2305"""
+        # The placeholder is substituted normally.
+        self.assertEqual(format_minutes_remaining(
+            "cooking for %d mins", 5), "cooking for 5 mins")
+        # A translation without a placeholder (e.g., some Arabic and
+        # Hebrew plural forms) is shown as-is.
+        so_close = "almost done, like actually"
+        self.assertEqual(format_minutes_remaining(so_close, 0), so_close)
+        # A stray '%' that cannot be formatted must not crash either.
+        self.assertEqual(format_minutes_remaining("100%| done", 1),
+                         "100%| done")
+
     def test_AccessDenied(self):
         """Test Worker using Action.AccessDeniedAction"""
-        self.action_test_helper('access.denied', 0, 1, 4096, 1, 3, 1)
+        with self.assertLogs(level='ERROR') as log_context:
+            self.action_test_helper('access.denied', 0, 1, 4096, 1, 3, 1)
+            if bleachbit.IS_WINDOWS:
+                self.assertIn('Access denied: c:\\access\\denied',
+                              log_context.output[0])
+                self.assertNotIn('\\\\', log_context.output[0])
+
+    def test_SymlinkRefusedNoTraceback(self):
+        """Worker logs ELOOP and ENOTDIR refusals without a traceback"""
+        path = self.write_file('test_symlink_refused', b'')
+        for err_no in (errno.ELOOP, errno.ENOTDIR):
+            with self.subTest(errno=err_no):
+                def refuse(p, err_no=err_no):
+                    raise OSError(err_no, os.strerror(err_no), p)
+
+                cmd = Command.Function(path, refuse, 'Test')
+                worker = Worker(CLI.CliCallback(), True, {'test': ['option1']})
+                with self.assertLogs('bleachbit.Worker', level='ERROR') as cm:
+                    list(worker.execute(cmd, 'test.option1'))
+                output = '\n'.join(cm.output)
+                self.assertIn(f'Access denied: {path}', output)
+                self.assertNotIn('Traceback', output)
+                self.assertEqual(worker.total_errors, 1)
 
     def test_DoesNotExist(self):
         """Test Worker using Action.DoesNotExistAction"""
-        self.action_test_helper('does.not.exist', 0, 1, 4096, 1, 3, 1)
+        with self.assertLogs(level='ERROR') as log_context:
+            self.action_test_helper('does.not.exist', 0, 1, 4096, 1, 3, 1)
+            if bleachbit.IS_WINDOWS:
+                # Make sure there is a simple messages without double backslashes.
+                self.assertIn(
+                    'File not found: c:\\does\\not\\exist', log_context.output[0])
+                self.assertNotIn('\\\\', log_context.output[0])
+
+    def test_TOCTOU_vanished_during_preview(self):
+        """Test Worker continues to the next file after a TOCTOU race
+
+        A file that exists at listing time but vanishes before getsize()
+        (simulated via mock) should log an error but not block the next file.
+        """
+        real_getsize = FileUtilities.getsize
+        call_count = [0]
+
+        def vanishing_getsize(path):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise FileNotFoundError(
+                    errno.ENOENT, 'No such file or directory', path)
+            return real_getsize(path)
+
+        try:
+            with mock.patch('bleachbit.FileUtilities.getsize',
+                            side_effect=vanishing_getsize):
+                with self.assertLogs(level='ERROR') as log_context:
+                    # assert 1 file processed and 1 error
+                    self.action_test_helper(
+                        'toctou', 0, 1, 4096, 1, 3, 1)
+            self.assertIn('File not found', '\n'.join(log_context.output))
+        finally:
+            # Clean up the ghost file that was not deleted by the worker
+            if ToctouAction.ghost_path and os.path.exists(ToctouAction.ghost_path):
+                os.unlink(ToctouAction.ghost_path)
+            ToctouAction.ghost_path = None
 
     def test_FunctionGenerator(self):
         """Test Worker using Action.FunctionGenerator"""
@@ -254,21 +382,41 @@ class WorkerTestCase(common.BleachbitTestCase):
         """Test Worker using Action.LockedAction"""
         from win32com.shell import shell
         if shell.IsUserAnAdmin():
-            # If an admin, the first attempt will mark for delete (3 bytes),
-            # and the second attempt will actually delete it (3 bytes).
+            # If an admin, the first attempt, with locking, will mark for
+            # delete (3 bytes), and the second attempt will actually delete
+            # it (0 bytes, already truncated).
             errors_expected = 0
-            bytes_expected = 3 + 3
+            bytes_expected = 3 + 0
             total_deleted = 2
         else:
-            # If not an admin, the first attempt will fail, and the second wil succeed.
+            # If not an admin, the first attempt (locked) truncates (to 0B) and fails,
+            # then the second attempt (unlocked) deletes the 0-byte file.
             errors_expected = 1
-            bytes_expected = 3
+            bytes_expected = 0
             total_deleted = 1
         self.action_test_helper(
             'locked', 0, errors_expected, None, None, bytes_expected, total_deleted)
 
+    def test_SqliteDatabaseLocked(self):
+        """Test Worker logs a locked SQLite database without a traceback"""
+        path = self.write_file('test_sqlite_database_locked', b'')
+
+        def sqlite_locked(_):
+            raise sqlite3.OperationalError('database is locked')
+
+        cmd = Command.Function(path, sqlite_locked,
+                               'Test SQLite database locked')
+        worker = Worker(CLI.CliCallback(), True, {'test': ['option1']})
+        with self.assertLogs('bleachbit.Worker', level='ERROR') as log_context:
+            list(worker.execute(cmd, 'option1'))
+        output = '\n'.join(log_context.output)
+        self.assertIn(f'Database is locked: {path}', output)
+        self.assertNotIn('Traceback', output)
+        self.assertEqual(worker.total_errors, 1)
+
     def test_RuntimeError(self):
-        """Test Worker using Action.RuntimeErrorAction
+        """Test Worker using Action.RuntimeErrorAction. It is normal to see a traceback.
+
         The Worker module handles these differently than
         access denied exceptions
         """
@@ -283,27 +431,28 @@ class WorkerTestCase(common.BleachbitTestCase):
         """Test for deep scan"""
 
         # load cleaners from XML
-        import bleachbit.CleanerML
-        list(bleachbit.CleanerML.load_cleaners())
+        from bleachbit import CleanerML
+        list(CleanerML.load_cleaners())
 
         # DeepScan itself is tested elsewhere, so replace it here
-        import bleachbit.DeepScan
-        SaveDeepScan = bleachbit.DeepScan.DeepScan
+        from bleachbit import DeepScan
+        SaveDeepScan = DeepScan.DeepScan
         self.scanned = 0
         parent = self
 
         class MyDeepScan:
             def __init__(self, searches):
-                for (path, searches) in searches.items():
+                for (path, path_searches) in searches.items():
                     parent.assertEqual(path, os.path.expanduser('~'))
-                    for s in searches:
-                        parent.assertIn(s.regex, ['^Thumbs\\.db$', '^Thumbs\\.db:encryptable$'])
+                    for s in path_searches:
+                        parent.assertIn(
+                            s.regex, ['^Thumbs\\.db$', '^Thumbs\\.db:encryptable$'])
 
             def scan(self):
                 parent.scanned += 1
                 yield True
 
-        bleachbit.DeepScan.DeepScan = MyDeepScan
+        DeepScan.DeepScan = MyDeepScan
 
         # test
         operations = {'deepscan': ['thumbs_db']}
@@ -314,7 +463,7 @@ class WorkerTestCase(common.BleachbitTestCase):
         self.assertEqual(1, self.scanned)
 
         # clean up
-        bleachbit.DeepScan.DeepScan = SaveDeepScan
+        DeepScan.DeepScan = SaveDeepScan
 
     def test_multiple_options(self):
         """Test one cleaner with two options"""
@@ -337,3 +486,78 @@ class WorkerTestCase(common.BleachbitTestCase):
         self.assertEqual(worker.total_special, 0)
         self.assertEqual(worker.total_errors, 0)
         self.assertEqual(worker.total_deleted, 2)
+
+    def test_abort(self):
+        """Abort stops before the next option and skips the deep scan"""
+        filename1 = self.mkstemp(prefix='bleachbit-test-worker')
+        filename2 = self.mkstemp(prefix='bleachbit-test-worker')
+        deep_dir = self.mkdtemp(prefix='bleachbit-test-worker')
+        bak = self.write_file(os.path.join(deep_dir, 'x.bak'))
+        backends['test'] = TestCleaner.actions_to_cleaner([
+            f'<action command="delete" search="deep" regex="\\.bak$" path="{deep_dir}"/>',
+            f'<action command="delete" search="file" path="{filename1}"/>',
+            f'<action command="delete" search="file" path="{filename2}"/>'])
+        self.addCleanup(backends.pop, 'test', None)
+        ui = CLI.CliCallback(quiet=True)
+        worker = Worker(ui, True, {'test': ['option1', 'option2', 'option3']})
+        # Abort as the first file is deleted, after the deep search is queued
+        with mock.patch.object(ui, 'append_text',
+                               side_effect=lambda *_args: worker.abort()):
+            list(worker.run())
+        self.assertTrue(worker.deepscans)
+        self.assertNotExists(filename1)
+        self.assertExists(filename2)
+        self.assertExists(bak)
+        self.assertEqual(worker.total_deleted, 1)
+
+    def test_backends_cleared_mid_run(self):
+        """A cleaner refresh during a run does not stop the worker"""
+        filename1 = self.mkstemp(prefix='bleachbit-test-worker')
+        filename2 = self.mkstemp(prefix='bleachbit-test-worker')
+        backends['test1'] = TestCleaner.action_to_cleaner(
+            f'<action command="delete" search="file" path="{filename1}"/>')
+        backends['test2'] = TestCleaner.action_to_cleaner(
+            f'<action command="delete" search="file" path="{filename2}"/>')
+        self.addCleanup(backends.pop, 'test1', None)
+        self.addCleanup(backends.pop, 'test2', None)
+        worker = Worker(CLI.CliCallback(quiet=True), True,
+                        {'test1': ['option1'], 'test2': ['option1']})
+        run = worker.run()
+        self.assertTrue(next(run))
+        # register_cleaners() starts with backends.clear()
+        del backends['test1']
+        del backends['test2']
+        while next(run):
+            pass
+        self.assertNotExists(filename1)
+        self.assertNotExists(filename2)
+        self.assertEqual(worker.total_errors, 0)
+
+    def test_walk_files_cache_freed_after_run(self):
+        """A finished run does not keep its walk.files listings"""
+        dirname = self.mkdtemp(prefix='bleachbit-test-worker')
+        self.write_file(os.path.join(dirname, 'foo'))
+        backends['test'] = TestCleaner.action_to_cleaner(
+            f'<action command="delete" search="walk.files" path="{dirname}"/>')
+        self.addCleanup(backends.pop, 'test', None)
+        worker = Worker(CLI.CliCallback(quiet=True), False,
+                        {'test': ['option1']})
+        list(worker.run())
+        self.assertEqual(worker.total_deleted, 1)
+        for plugin in ActionProvider.plugins:
+            self.assertFalse(getattr(plugin, 'cache', (None,) * 4)[2], plugin)
+
+    def test_walk_files_cache_per_run(self):
+        """A run does not replay the files an earlier run deleted"""
+        dirname = self.mkdtemp(prefix='bleachbit-test-worker')
+        filename = self.write_file(os.path.join(dirname, 'foo'))
+        backends['test'] = TestCleaner.action_to_cleaner(
+            f'<action command="delete" search="walk.files" path="{dirname}"/>')
+        self.addCleanup(backends.pop, 'test', None)
+        for really_delete in (True, False):
+            worker = Worker(CLI.CliCallback(quiet=True), really_delete,
+                            {'test': ['option1']})
+            list(worker.run())
+        self.assertNotExists(filename)
+        self.assertEqual(worker.total_deleted, 0)
+        self.assertEqual(worker.total_errors, 0)

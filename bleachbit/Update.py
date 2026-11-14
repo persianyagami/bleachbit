@@ -1,7 +1,7 @@
 # vim: ts=4:sw=4:expandtab
 
 # BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
+# Copyright (C) 2008-2025 Andrew Ziem
 # https://www.bleachbit.org
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,26 +15,27 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
 """
 Check for updates via the Internet
 """
 
-import bleachbit
-from bleachbit import _
-
+# standard library
 import hashlib
 import logging
 import os
-import os.path
-import platform
-import socket
 import sys
 import xml.dom.minidom
-from urllib.request import build_opener
-from urllib.error import URLError
+
+# local
+import bleachbit
+from bleachbit.General import reject_xml_dtd
+from bleachbit.Language import get_text as _
+from bleachbit.Network import (download_url_to_fn, fetch_url,
+                               get_ip_for_url, get_update_request_headers,
+                               RequestException, HAVE_REQUESTS)
 
 
 logger = logging.getLogger(__name__)
@@ -42,99 +43,55 @@ logger = logging.getLogger(__name__)
 
 def update_winapp2(url, hash_expected, append_text, cb_success):
     """Download latest winapp2.ini file.  Hash is sha512 or None to disable checks"""
+    if not url.lower().startswith('https://'):
+        logger.warning('refusing insecure winapp2 URL: %s', url)
+        return
     # first, determine whether an update is necessary
-    from bleachbit import personal_cleaners_dir
-    fn = os.path.join(personal_cleaners_dir, 'winapp2.ini')
-    delete_current = False
+
+    fn = os.path.join(bleachbit.personal_cleaners_dir, 'winapp2.ini')
     if os.path.exists(fn):
         with open(fn, 'rb') as f:
             hash_current = hashlib.sha512(f.read()).hexdigest()
             if not hash_expected or hash_current == hash_expected:
                 # update is same as current
                 return
-        delete_current = True
     # download update
-    opener = build_opener()
-    opener.addheaders = [('User-Agent', user_agent())]
-    doc = opener.open(fullurl=url, timeout=20).read()
-    # verify hash
-    hash_actual = hashlib.sha512(doc).hexdigest()
-    if hash_expected and not hash_actual == hash_expected:
-        raise RuntimeError("hash for %s actually %s instead of %s" %
-                           (url, hash_actual, hash_expected))
-    # delete current
-    if delete_current:
-        from bleachbit.FileUtilities import delete
-        delete(fn, True)
-    # write file
-    if not os.path.exists(personal_cleaners_dir):
-        os.mkdir(personal_cleaners_dir)
-    with open(fn, 'wb') as f:
-        f.write(doc)
-    append_text(_('New winapp2.ini was downloaded.'))
-    cb_success()
+    # Define error handler to propagate download errors
 
+    def on_error(msg, msg2):
+        raise RuntimeError(f"{msg}: {msg2}")
 
-def user_agent():
-    """Return the user agent string"""
-    __platform = platform.system()  # Linux or Windows
-    __os = platform.uname()[2]  # e.g., 2.6.28-12-generic or XP
-    if sys.platform == "win32":
-        # misleading: Python 2.5.4 shows uname()[2] as Vista on Windows 7
-        __os = platform.uname()[3][
-            0:3]  # 5.1 = Windows XP, 6.0 = Vista, 6.1 = 7
-    elif sys.platform.startswith('linux'):
-        dist = platform.linux_distribution()
-        # example: ('fedora', '11', 'Leonidas')
-        # example: ('', '', '') for Arch Linux
-        if 0 < len(dist[0]):
-            __os = dist[0] + '/' + dist[1] + '-' + dist[2]
-    elif sys.platform[:6] == 'netbsd':
-        __sys = platform.system()
-        mach = platform.machine()
-        rel = platform.release()
-        __os = __sys + '/' + mach + ' ' + rel
-    __locale = ""
-    try:
-        import locale
-        __locale = locale.getdefaultlocale()[0]  # e.g., en_US
-    except:
-        logger.exception('Exception when getting default locale')
-
-    try:
-        gi.require_version('Gtk', '3.0')
-        from gi.repository import Gtk
-        gtkver = '; GTK %s' % '.'.join([str(x) for x in Gtk.gtk_version])
-    except:
-        gtkver = ""
-
-    agent = "BleachBit/%s (%s; %s; %s%s)" % (bleachbit.APP_VERSION,
-                                             __platform, __os, __locale, gtkver)
-    return agent
+    if download_url_to_fn(url, fn, hash_expected, on_error):
+        # TRANSLATORS: Status message after a successful winapp2.ini update.
+        append_text(_('New winapp2.ini was downloaded.'))
+        cb_success()
 
 
 def update_dialog(parent, updates):
     """Updates contains the version numbers and URLs"""
-    from gi.repository import Gtk
+    # import these here to allow headless mode.
+    from bleachbit.GtkShim import Gtk
     from bleachbit.GuiBasic import open_url
-    dlg = Gtk.Dialog(title=_("Update BleachBit"),
-                     transient_for=parent,
-                     modal=True,
-                     destroy_with_parent=True)
+    dlg = Gtk.Dialog(
+        # TRANSLATORS: Title of the software update dialog.
+        title=_("Update BleachBit"),
+        transient_for=parent,
+        modal=True,
+        destroy_with_parent=True)
     dlg.set_default_size(250, 125)
 
+    # TRANSLATORS: Message in the software update dialog.
     label = Gtk.Label(label=_("A new version is available."))
     dlg.vbox.pack_start(label, True, True, 0)
 
-    for update in updates:
-        ver = update[0]
-        url = update[1]
+    for (ver, url) in updates:
         box_update = Gtk.Box()
-        # TRANSLATORS: %s expands to version such as '0.8.4' or '0.8.5beta' or
-        # similar
+        # TRANSLATORS: %s expands to version such as '4.6.0'
         button_stable = Gtk.Button(_("Update to version %s") % ver)
+        # Bind url now: the callback runs after the loop, when url would
+        # otherwise be the last update's.
         button_stable.connect(
-            'clicked', lambda dummy: open_url(url, parent, False))
+            'clicked', lambda dummy, url=url: open_url(url, parent, False))
         button_stable.connect('clicked', lambda dummy: dlg.response(0))
         box_update.pack_start(button_stable, False, True, 10)
         dlg.vbox.pack_start(box_update, False, True, 0)
@@ -149,30 +106,46 @@ def update_dialog(parent, updates):
 
 
 def check_updates(check_beta, check_winapp2, append_text, cb_success):
-    """Check for updates via the Internet"""
-    opener = build_opener()
-    socket.setdefaulttimeout(bleachbit.socket_timeout)
-    opener.addheaders = [('User-Agent', user_agent())]
-    import encodings.idna # https://github.com/bleachbit/bleachbit/issues/760
+    """Check for updates via the Internet
+
+    Returns a list of (ver, url) pairs, empty when the check succeeded
+    and there is no update, or None when the check itself failed.
+    """
+    url = bleachbit.update_check_url
+    if 'windowsapp' in sys.executable.lower():
+        url += '?windowsapp=1'
     try:
-        handle = opener.open(bleachbit.update_check_url)
-    except URLError as e:
+        response = fetch_url(url,
+                             headers=get_update_request_headers())
+    except (RequestException, OSError) as e:
         logger.error(
             _('Error when opening a network connection to check for updates. Please verify the network is working and that a firewall is not blocking this application. Error message: {}').format(e))
-        return ()
-    doc = handle.read()
+        logger.debug('URL %s has IP address %s', url, get_ip_for_url(url))
+        if HAVE_REQUESTS and hasattr(e, 'response') and e.response is not None:
+            logger.debug(e.response.headers)
+        return None
     try:
-        dom = xml.dom.minidom.parseString(doc)
-    except:
-        logger.exception('The update information does not parse: %s', doc)
-        return ()
+        # pyexpat rejects a str carrying an encoding declaration; pass bytes
+        reject_xml_dtd(response.content, 'update XML')
+        dom = xml.dom.minidom.parseString(response.content)
+    except Exception:
+        logger.exception(
+            'The update information does not parse: %s', response.text)
+        return None
 
     def parse_updates(element):
-        if element:
-            ver = element[0].getAttribute('ver')
-            url = element[0].firstChild.data
-            return ver, url
-        return ()
+        """Return a (ver, url) pair, or None when there is nothing usable"""
+        if not element:
+            return None
+        ver = element[0].getAttribute('ver')
+        child = element[0].firstChild
+        url = child.data.strip() if child is not None and hasattr(child, 'data') else ''
+        if not (isinstance(ver, str) and isinstance(url, str)
+                and url.lower().startswith('https://')):
+            logger.warning('ignoring malformed update entry: ver=%r, url=%r',
+                           ver, url)
+            return None
+        return ver, url
 
     stable = parse_updates(dom.getElementsByTagName("stable"))
     beta = parse_updates(dom.getElementsByTagName("beta"))
@@ -181,14 +154,17 @@ def check_updates(check_beta, check_winapp2, append_text, cb_success):
     if check_winapp2 and wa_element:
         wa_sha512 = wa_element[0].getAttribute('sha512')
         wa_url = wa_element[0].getAttribute('url')
-        update_winapp2(wa_url, wa_sha512, append_text, cb_success)
+        try:
+            update_winapp2(wa_url, wa_sha512, append_text, cb_success)
+        except Exception as e:
+            logger.error('Failed to update winapp2.ini: %s', e)
 
     dom.unlink()
 
     if stable and beta and check_beta:
-        return stable, beta
+        return [stable, beta]
     if stable:
-        return stable,
+        return [stable]
     if beta and check_beta:
-        return beta,
-    return ()
+        return [beta]
+    return []

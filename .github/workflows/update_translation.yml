@@ -1,0 +1,67 @@
+name: Merge new translations to .desktop and NSIS
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'po/*.po' # translation changed
+
+permissions:
+  contents: read
+
+jobs:
+  update-desktop:
+    if: github.repository == 'bleachbit/bleachbit'
+    runs-on: ubuntu-slim
+    # Normal runtime on ubuntu-latest is 30 to 60 seconds, but 2
+    # minutes was observed. Python setup and dependencies take
+    # the longest.
+    timeout-minutes: 10
+    permissions:
+      contents: write # commit and push localization files
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext
+          # pinned to a bleachbit-misc commit, bump the hash with it
+          curl -fsSLO https://raw.githubusercontent.com/bleachbit/bleachbit-misc/75b30faf16b1b852f7241dac91f5c252d88eee90/extract_desktop.py
+          echo '8cb804918c93ad8932e5f99c291980cd2eb88c158de189acb5ebe93ccc22e4a3  extract_desktop.py' | sha256sum -c
+
+      - name: Compile message catalogs to binary format
+        run: make -C po local
+
+      - name: Extract translations from .mo to .desktop
+        run: python3 extract_desktop.py
+
+      # Generate windows/NsisInclude/NsisMultiUserLang.nsh from po/*.po
+      - name: Extract translations to NSIS
+        run: python3 windows/nsis_translations.py --generate
+
+      - name: Commit if changed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git add org.bleachbit.BleachBit.desktop windows/NsisInclude/NsisMultiUserLang.nsh
+          if git diff --cached --quiet; then
+              echo "No changes to commit."
+          else
+              git commit -m 'Update localization files' -m 'Automatically extracted from ./po/*.po'
+              git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPOSITORY}.git" "HEAD:${REF_NAME}"
+          fi

@@ -1,31 +1,30 @@
-# vim: ts=4:sw=4:expandtab
-# coding=utf-8
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 
 """
 Test cases for __init__
 """
 
-from tests import common
+# These tests reach into internals on purpose.
+# pylint: disable=protected-access
 
 import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+import bleachbit
+from bleachbit import IS_MAC, IS_POSIX, IS_WINDOWS, get_share_dirs, get_share_path
+from bleachbit.General import get_executable
+from tests import common
 
 
 class InitTestCase(common.BleachbitTestCase):
@@ -45,18 +44,140 @@ class InitTestCase(common.BleachbitTestCase):
         self.assertEqual(test_input, test_output)
 
         # should be expanded
-        if os.name == 'nt':
+        test_inputs = ()
+        if IS_WINDOWS:
             test_inputs = ('~', r'~\ntuser.dat')
-        if os.name == 'posix':
+        elif IS_MAC:
+            # macOS defaults to zsh
+            test_inputs = ('~', '~/.zshrc')
+        elif IS_POSIX:
             test_inputs = ('~', '~/.profile')
         for test_input in test_inputs:
             test_output = os.path.expanduser(test_input)
             self.assertNotEqual(test_input, test_output)
-            self.assertExists(test_output)
-            if os.name == 'posix':
+            msg = None
+            if not os.path.exists(test_output) and not test_input == '~':
+                msg = f"contents of home directory: {os.listdir(os.path.expanduser('~'))}"
+            self.assertExists(test_output, msg)
+            if IS_POSIX:
                 self.assertTrue(os.path.samefile(
                     test_output, os.path.expanduser(test_input)))
 
+    def test_seconds_since_process_start(self):
+        """Process age is known on Windows and Linux and is a small number"""
+        seconds = bleachbit._seconds_since_process_start()
+        if IS_WINDOWS or sys.platform.startswith('linux'):
+            self.assertIsNotNone(seconds)
+        if seconds is not None:
+            self.assertGreaterEqual(seconds, 0)
+            self.assertLess(seconds, 24 * 3600)
+
+    def test_log_startup_time(self):
+        """The first milestone logs the package import and arms the exit one"""
+        clock = bleachbit._startup_clock
+        saved = (clock.t0, clock.enabled, clock.rebased)
+        clock.enabled = True
+        clock.rebased = False
+        try:
+            with mock.patch('bleachbit.atexit.register') as register, \
+                    self.assertLogs('bleachbit', level='INFO') as cm:
+                bleachbit.log_startup_time('test milestone')
+        finally:
+            clock.t0, clock.enabled, clock.rebased = saved
+        register.assert_called_once_with(clock._log, 'atexit done')
+        times = [re.fullmatch(r'INFO:bleachbit:startup (.+): ([0-9.]+) ms', line)
+                 for line in cm.output]
+        self.assertEqual([m.group(1) for m in times],
+                         ['package imported', 'test milestone'])
+        self.assertLessEqual(
+            float(times[0].group(2)), float(times[1].group(2)))
+
+    def test_get_share_dirs(self):
+        """Unit test for get_share_dirs()"""
+        got_shared_dirs = get_share_dirs()
+        # There must be at least one shared directory.
+        self.assertGreater(len(got_shared_dirs), 0)
+        existing = [d for d in got_shared_dirs if os.path.isdir(d)]
+        # At least one of the shared directories must exist.
+        self.assertGreater(len(existing), 0,
+                           f'No share dir exists among: {got_shared_dirs}')
+
+    def test_get_share_path(self):
+        """Unit test for get_share_path()"""
+        for fn in ('app-menu.ui', 'protected_path.xml'):
+            self.assertExists(get_share_path(fn))
+        self.assertIsNone(get_share_path('nonexistent'))
+
+    def test_icon_lookup_covers_make_install(self):
+        """The icon path of a default make install is looked up"""
+        makefile = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), 'Makefile')
+        with open(makefile, encoding='utf-8') as f:
+            text = f.read()
+        prefix = re.search(r'^prefix \?= (\S+)$', text, re.M).group(1)
+        self.assertRegex(text, r'(?m)^datadir \?= \$\(prefix\)/share$')
+        self.assertIn('bleachbit.png $(DESTDIR)$(datadir)/pixmaps/', text)
+        self.assertIn(prefix + '/share/pixmaps/bleachbit.png',
+                      getattr(bleachbit, '__icons'))
+
+    def test_stdout_encoding_frozen_console(self):
+        """A frozen console build uses the encoding of a redirected stdout"""
+        script = '''
+import io
+import sys
+sys.frozen = 'console_exe'
+sys.stdout = io.TextIOWrapper(io.BytesIO(), encoding='cp1252')
+import bleachbit
+sys.stderr.write('encoding=' + bleachbit.stdout_encoding)
+'''
+        result = subprocess.run(
+            [get_executable(), '-c', script],
+            capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual(result.returncode, 0, f'stderr: {result.stderr}')
+        self.assertIn('encoding=cp1252', result.stderr)
+
+    @common.skipUnlessWindows
+    def test_harden_dll_search_path(self):
+        """The current directory is not on the DLL search path"""
+        import ctypes
+        from ctypes import wintypes
+        ERROR_MOD_NOT_FOUND = 126
+
+        src = os.path.join(os.environ['SystemRoot'], 'System32', 'version.dll')
+        tmpdir = tempfile.mkdtemp()
+        planted = os.path.join(tmpdir, 'bb_dll_preload_test.dll')
+        shutil.copy(src, planted)
+
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        load = kernel32.LoadLibraryW
+        load.argtypes = [wintypes.LPCWSTR]
+        load.restype = wintypes.HMODULE
+        free = kernel32.FreeLibrary
+        free.argtypes = [wintypes.HMODULE]
+
+        orig_cwd = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            bleachbit._harden_dll_search_path()
+
+            # By bare name the DLL must not be found in the current directory
+            ctypes.set_last_error(0)
+            handle = load('bb_dll_preload_test.dll')
+            if handle:
+                free(handle)
+            self.assertFalse(
+                handle, 'current directory still on DLL search path')
+            self.assertEqual(ctypes.get_last_error(), ERROR_MOD_NOT_FOUND)
+
+            # A full path still loads
+            handle = load(planted)
+            self.assertTrue(handle)
+            free(handle)
+        finally:
+            os.chdir(orig_cwd)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
 
 def suite():
-    return unittest.makeSuite(InitTestCase)
+    """Return a test suite"""
+    return unittest.TestLoader().loadTestsFromTestCase(InitTestCase)

@@ -1,43 +1,129 @@
-# vim: ts=4:sw=4:expandtab
-# -*- coding: UTF-8 -*-
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 """
 Test case for module Memory
 """
 
-from tests import common
-from bleachbit.Memory import *
+import os
+import re
+import subprocess
+import sys
+import textwrap
+from contextlib import contextmanager
+from unittest import mock
 
-import unittest
+from tests import common
+from bleachbit import General, logger
+from bleachbit.FileUtilities import exe_exists
+from bleachbit.Memory import (
+    _fstab_swap_options,
+    _memory_child_script,
+    _parse_meminfo_free,
+    _run_memory_child_fork,
+    _run_memory_child_systemd_scope,
+    count_swap_linux,
+    disable_swap_linux,
+    enable_swap_linux,
+    get_proc_swaps,
+    get_swap_label,
+    get_swap_size_linux,
+    get_swap_uuid,
+    make_self_oom_target_linux,
+    parse_swapoff,
+    physical_free, physical_free_darwin,
+    report_free,
+    wipe_memory,
+    wipe_swap_linux)
 
 
 class MemoryTestCase(common.BleachbitTestCase):
     """Test case for module Memory"""
 
-    @common.skipIfWindows
-    @unittest.skipIf(os.getenv('TRAVIS', 'f') == 'true', 'Not supported on Travis CI')
+    @staticmethod
+    @contextmanager
+    def _mock_systemd_scope_common():
+        """Common mocks for _run_memory_child_systemd_scope(): systemd-run
+        is present and the real UID is 1000."""
+        with mock.patch('bleachbit.FileUtilities.exe_exists',
+                        return_value=True):
+            with mock.patch('bleachbit.Memory.General.get_real_uid',
+                            return_value=1000):
+                yield
+
+    def _assert_fork_exit_status(self, waitpid_status, expected):
+        """Run _run_memory_child_fork() under the standard parent-path mocks
+        and assert it returns ``expected`` for the given waitpid status."""
+        # Mock _() to avoid lazy translation setup, which calls
+        # subprocess.Popen and would break under mocked os.fork/os.waitpid.
+        with mock.patch('bleachbit.Memory._', side_effect=lambda s: s):
+            with mock.patch('bleachbit.Memory.General.get_real_uid',
+                            return_value=1000):
+                with mock.patch('os.fork', return_value=1234):
+                    with mock.patch('os.waitpid',
+                                    return_value=(1234, waitpid_status)):
+                        self.assertEqual(_run_memory_child_fork(), expected)
+
+    def _run_fork_child_path(self, **uid_patch):
+        """Run _run_memory_child_fork() as the forked child and return the
+        make_self_oom_target_linux mock."""
+        # os._exit() never returns, so the mock raises instead
+        with mock.patch('bleachbit.Memory.General.get_real_uid', **uid_patch):
+            with mock.patch('bleachbit.Memory.make_self_oom_target_linux') as mock_oom:
+                with mock.patch('bleachbit.Memory.fill_memory_linux') as mock_fill:
+                    with mock.patch('os.fork', return_value=0):
+                        with mock.patch('os._exit', side_effect=SystemExit) as mock_exit:
+                            with self.assertRaises(SystemExit):
+                                _run_memory_child_fork()
+        mock_fill.assert_called_once()
+        mock_exit.assert_called_once_with(0)
+        return mock_oom
+
+    def _assert_wipe_memory_happy_path(self, scope_return, fork_return,
+                                       fork_called):
+        """Exercise wipe_memory() through its mocked happy path and verify
+        the generator yields two progress values then 0, with swap
+        re-enabled. ``scope_return`` and ``fork_return`` select which child
+        runner is used; ``fork_called`` asserts whether the fork fallback
+        is expected to run."""
+        with mock.patch('bleachbit.Memory._', side_effect=lambda s: s):
+            with mock.patch('bleachbit.FileUtilities.exe_exists',
+                            return_value=True):
+                with mock.patch('bleachbit.Memory.get_proc_swaps',
+                                return_value=''):
+                    with mock.patch('bleachbit.Memory.disable_swap_linux',
+                                    return_value=['/dev/sda1']):
+                        with mock.patch('bleachbit.Memory.wipe_swap_linux'):
+                            with mock.patch(
+                                    'bleachbit.Memory._run_memory_child_systemd_scope',
+                                    return_value=scope_return):
+                                with mock.patch(
+                                        'bleachbit.Memory._run_memory_child_fork',
+                                        return_value=fork_return) as mock_fork:
+                                    with mock.patch(
+                                            'bleachbit.Memory.enable_swap_linux') as mock_enable:
+                                        gen = wipe_memory()
+                                        self.assertTrue(next(gen))
+                                        self.assertTrue(next(gen))
+                                        self.assertEqual(next(gen), 0)
+                                        self.assertTrue(mock_enable.called)
+                                        self.assertEqual(mock_fork.called,
+                                                         fork_called)
+
+    @common.skipUnlessLinux
     def test_get_proc_swaps(self):
         """Test for method get_proc_swaps"""
+        if not exe_exists(General.resolve_exe('swapon')):
+            self.skipTest('swapon not found')
         ret = get_proc_swaps()
+        if not count_swap_linux() and not ret:
+            # swapon -s prints nothing when no swap is active
+            return
         self.assertGreater(len(ret), 10)
-        if not re.search('Filename\s+Type\s+Size', ret):
+        if not re.search(r'Filename\s+Type\s+Size', ret):
             raise RuntimeError(
                 "Unexpected first line in swap summary '%s'" % ret)
 
@@ -54,16 +140,25 @@ class MemoryTestCase(common.BleachbitTestCase):
         # restore
         os.seteuid(euid)
 
-    @common.skipIfWindows
+    @common.skipUnlessLinux
     def test_count_linux_swap(self):
         """Test for method count_linux_swap"""
         n_swaps = count_swap_linux()
         self.assertIsInteger(n_swaps)
         self.assertTrue(0 <= n_swaps < 10)
 
+    @common.skipUnlessLinux
+    def test_no_proc_swaps(self):
+        """A kernel without swap support has no /proc/swaps"""
+        with mock.patch('bleachbit.Memory.open', create=True,
+                        side_effect=FileNotFoundError):
+            self.assertEqual(count_swap_linux(), 0)
+            with mock.patch('bleachbit.General.run_external',
+                            return_value=(1, '', 'swapon: failed')):
+                self.assertEqual(get_proc_swaps(), '')
+
     @common.skipIfWindows
     def test_physical_free_darwin(self):
-        # TODO: use mock
         self.assertEqual(physical_free_darwin(lambda:
                                               """Mach Virtual Memory Statistics: (page size of 4096 bytes)
 Pages free:                              836891.
@@ -93,6 +188,21 @@ Swapouts:                              20258188.
                           lambda: "Invalid header")
 
     @common.skipIfWindows
+    def test_physical_free_darwin_uses_absolute_path(self):
+        """physical_free_darwin() must invoke vm_stat via its absolute path, not PATH lookup"""
+        sample = ("Mach Virtual Memory Statistics: (page size of 4096 bytes)\n"
+                  "Pages free:                              1.\n")
+        with mock.patch('bleachbit.Memory.subprocess.check_output',
+                        return_value=sample) as mock_check_output:
+            physical_free_darwin()
+        mock_check_output.assert_called_once()
+        call = mock_check_output.call_args
+        self.assertEqual(call.args[0], [General.resolve_exe('vm_stat')])
+        self.assertTrue(call.kwargs.get('text'))
+        # the child's env is sanitized (LD_*/DYLD_* dropped when root)
+        self.assertIn('env', call.kwargs)
+
+    @common.skipUnlessLinux
     def test_physical_free(self):
         """Test for method physical_free"""
         ret = physical_free()
@@ -101,19 +211,47 @@ Swapouts:                              20258188.
         self.assertGreater(physical_free(), 0)
         report_free()
 
-    @common.skipIfWindows
+    def test_parse_meminfo_free_swapcached_not_matched(self):
+        """SwapCached must not be counted as free
+
+        Regression test that is a follow up to edba5e55"""
+        meminfo = (
+            "MemFree:          1000 kB\n"
+            "SwapCached:        500 kB\n"
+            "Cached:           2000 kB\n"
+        )
+        free_bytes, num_matches = _parse_meminfo_free(meminfo)
+        self.assertEqual(num_matches, 2)
+        self.assertEqual(free_bytes, (1000 + 2000) * 1024)
+
+    @common.skipUnlessLinux
+    def test_parse_meminfo_free_real_proc(self):
+        """The real /proc/meminfo must match exactly MemFree and Cached and
+        nothing else, so future false positives (e.g. SwapCached) are caught.
+
+        macOS does not have /proc.
+        """
+        with open('/proc/meminfo', encoding='utf-8') as f:
+            contents = f.read()
+        free_bytes, num_matches = _parse_meminfo_free(contents)
+        self.assertEqual(num_matches, 2)
+        self.assertGreater(free_bytes, 0)
+
+    @common.skipUnlessLinux
     def test_get_swap_size_linux(self):
         """Test for get_swap_size_linux()"""
-        with open('/proc/swaps') as f:
-            swapdev = f.read().split('\n')[1].split(' ')[0]
-        if 0 == len(swapdev):
+        if not exe_exists(General.resolve_exe('swapon')):
+            self.skipTest('swapon not found')
+        if 0 == count_swap_linux():
             self.skipTest('no active swap device detected')
+        with open('/proc/swaps', encoding='utf-8') as f:
+            swapdev = f.read().split('\n')[1].split(' ')[0]
         size = get_swap_size_linux(swapdev)
         self.assertIsInteger(size)
         self.assertGreater(size, 1024 ** 2)
         logger.debug("size of swap '%s': %d B (%d MB)",
                      swapdev, size, size / (1024 ** 2))
-        with open('/proc/swaps') as f:
+        with open('/proc/swaps', encoding='utf-8') as f:
             proc_swaps = f.read()
         size2 = get_swap_size_linux(swapdev, proc_swaps)
         self.assertEqual(size, size2)
@@ -121,7 +259,23 @@ Swapouts:                              20258188.
     @common.skipIfWindows
     def test_get_swap_uuid(self):
         """Test for method get_swap_uuid"""
+        if not exe_exists(General.resolve_exe('blkid')):
+            self.skipTest('blkid not found')
         self.assertEqual(get_swap_uuid('/dev/doesnotexist'), None)
+
+    @common.skipIfWindows
+    def test_get_swap_label(self):
+        """Test for get_swap_label() with mocks"""
+        blkid = General.resolve_exe('blkid')
+        with mock.patch('bleachbit.Memory.General.run_external',
+                        return_value=(0, 'my swap\n', '')) as mock_run:
+            self.assertEqual(get_swap_label('/dev/sda5'), 'my swap')
+            self.assertEqual(mock_run.call_args.args[0], [
+                blkid, '-o', 'value', '-s', 'LABEL', '/dev/sda5'])
+        # No label
+        with mock.patch('bleachbit.Memory.General.run_external',
+                        return_value=(2, '', '')):
+            self.assertIsNone(get_swap_label('/dev/sda5'))
 
     def test_parse_swapoff(self):
         """Test for method parse_swapoff"""
@@ -129,15 +283,584 @@ Swapouts:                              20258188.
             # Ubuntu 15.10 has format "swapoff /dev/sda3"
             ('swapoff /dev/sda3', '/dev/sda3'),
             ('swapoff for /dev/sda6', '/dev/sda6'),
-            ('swapoff on /dev/mapper/lubuntu-swap_1', '/dev/mapper/lubuntu-swap_1'))
+            ('swapoff on /dev/mapper/lubuntu-swap_1', '/dev/mapper/lubuntu-swap_1'),
+            ('swapoff /swap file', '/swap file'),
+            ('swapoff on /swap file', '/swap file'))
 
         for test in tests:
             self.assertEqual(parse_swapoff(test[0]), test[1])
+
+    @common.skipIfWindows
+    def test_disable_swap_linux(self):
+        """Test for disable_swap_linux() with mocks"""
+        # No swap active - early return
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=0):
+            self.assertIsNone(disable_swap_linux())
+
+        # Command failure
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=1):
+            with mock.patch('bleachbit.Memory.General.run_external', return_value=(1, '', 'swapoff failed')):
+                self.assertRaisesRegex(
+                    RuntimeError, 'swapoff failed', disable_swap_linux)
+
+        # Unexpected output
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=1):
+            with mock.patch('bleachbit.Memory.General.run_external', return_value=(0, 'unexpected\n', '')):
+                self.assertRaisesRegex(
+                    RuntimeError, 'Unexpected output', disable_swap_linux)
+
+        # Parse success
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=1):
+            with mock.patch('bleachbit.Memory.General.run_external', return_value=(0, 'swapoff /dev/sda3\n', '')):
+                devices = disable_swap_linux()
+                self.assertEqual(devices, ['/dev/sda3'])
+
+    @common.skipIfWindows
+    def test_enable_swap_linux(self):
+        """Test for enable_swap_linux() with mocks"""
+        header = 'Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n'
+        before = header + \
+            '/dev/zram0\tpartition\t8388604\t0\t100\n' \
+            '/swap file\tfile\t1048572\t0\t-2\n' \
+            '/dev/sdb1\tpartition\t1048572\t0\t5\n'
+        # swapoff failed on /dev/sdb1, so it is still on
+        after = header + '/dev/sdb1\tpartition\t1048572\t0\t5\n'
+        swapon = General.resolve_exe('swapon')
+        no_fstab = mock.patch('bleachbit.Memory._fstab_swap_options',
+                              return_value={})
+        no_fstab.start()
+        self.addCleanup(no_fstab.stop)
+
+        # An fstab entry comes back with its options, as 'swapon -a' does
+        fstab = {os.path.realpath('/dev/sdb1'): 'sw,discard,pri=5'}
+        with mock.patch('bleachbit.Memory._', side_effect=lambda s: s), \
+                mock.patch('bleachbit.Memory.get_proc_swaps', return_value=header), \
+                mock.patch('bleachbit.Memory._fstab_swap_options', return_value=fstab), \
+                mock.patch('bleachbit.Memory.General.run_external', return_value=(0, '', '')) as mock_run:
+            enable_swap_linux(after)
+            mock_run.assert_called_once_with(
+                [swapon, '-p', '5', '-o', 'sw,discard,pri=5', '/dev/sdb1'])
+
+        # Success: what was on comes back with its priority, and not
+        # through 'swapon -a', which only reads /etc/fstab
+        with mock.patch('bleachbit.Memory._', side_effect=lambda s: s):
+            with mock.patch('bleachbit.Memory.get_proc_swaps', return_value=after):
+                with mock.patch('bleachbit.Memory.General.run_external', return_value=(0, '', '')) as mock_run:
+                    enable_swap_linux(before)
+                    self.assertEqual(
+                        [call.args[0] for call in mock_run.call_args_list],
+                        [[swapon, '-p', '100', '/dev/zram0'],
+                         [swapon, '/swap file']])
+
+        # No swap was on, so none is turned on
+        with mock.patch('bleachbit.Memory._', side_effect=lambda s: s):
+            with mock.patch('bleachbit.Memory.get_proc_swaps', return_value=header):
+                with mock.patch('bleachbit.Memory.General.run_external') as mock_run:
+                    enable_swap_linux(header)
+                    mock_run.assert_not_called()
+
+        # /proc/swaps, the fallback for 'swapon -s', writes a space as \040
+        with mock.patch('bleachbit.Memory._', side_effect=lambda s: s):
+            with mock.patch('bleachbit.Memory.get_proc_swaps', return_value=header):
+                with mock.patch('bleachbit.Memory.General.run_external', return_value=(0, '', '')) as mock_run:
+                    enable_swap_linux(
+                        header + '/swap\\040file\tfile\t1048572\t0\t-2\n')
+                    mock_run.assert_called_once_with([swapon, '/swap file'])
+
+        # Failure
+        with mock.patch('bleachbit.Memory._', side_effect=lambda s: s):
+            with mock.patch('bleachbit.Memory.get_proc_swaps', return_value=header):
+                with mock.patch('bleachbit.Memory.General.run_external', return_value=(1, '', 'swapon failed')):
+                    self.assertRaisesRegex(
+                        RuntimeError, '/dev/zram0: swapon failed',
+                        enable_swap_linux, before)
+                self.assertRaisesRegex(
+                    RuntimeError, 'Unexpected first line',
+                    enable_swap_linux, 'bad header\n')
+                self.assertRaisesRegex(
+                    RuntimeError, 'Unexpected line',
+                    enable_swap_linux, header + 'malformed line\n')
+
+    @common.skipUnlessLinux
+    def test_enable_swap_linux_fstab_fallback(self):
+        header = 'Filename\tType\tSize\tUsed\tPriority\n'
+        swapon = General.resolve_exe('swapon')
+        fstab = {os.path.realpath('/swapfile'): 'sw,discard'}
+        for priority in (-2, 5):
+            for retry_rc in (0, 1):
+                with self.subTest(priority=priority, retry_rc=retry_rc):
+                    base_args = [swapon]
+                    if priority >= 0:
+                        base_args += ['-p', str(priority)]
+                    with mock.patch('bleachbit.Memory._', side_effect=lambda s: s), \
+                            mock.patch('bleachbit.Memory.get_proc_swaps', return_value=header), \
+                            mock.patch('bleachbit.Memory._fstab_swap_options', return_value=fstab), \
+                            mock.patch('bleachbit.Memory.logger.warning') as mock_warning, \
+                            mock.patch('bleachbit.Memory.General.run_external', side_effect=[
+                                (1, '', "invalid option -- 'o'"),
+                                (retry_rc, '', 'retry failed\n'),
+                                (0, '', '')]) as mock_run:
+                        before = header + (
+                            f'/swapfile\tfile\t1024\t0\t{priority}\n'
+                            '/other-swap\tfile\t1024\t0\t-2\n')
+                        if retry_rc:
+                            with self.assertRaisesRegex(
+                                    RuntimeError, '^/swapfile: retry failed$'):
+                                enable_swap_linux(before)
+                        else:
+                            enable_swap_linux(before)
+                        self.assertEqual(mock_run.call_args_list, [
+                            mock.call(
+                                base_args + ['-o', 'sw,discard', '/swapfile']),
+                            mock.call(base_args + ['/swapfile']),
+                            mock.call([swapon, '/other-swap'])])
+                        mock_warning.assert_called_once()
+
+    def test_fstab_swap_options(self):
+        """_fstab_swap_options() maps each swap area to its options"""
+        fstab = self.write_file(os.path.join(self.mkdtemp(), 'fstab'), text=(
+            '# comment\n'
+            'UUID=1234 / ext4 defaults 0 1\n'
+            'UUID=abcd none swap sw,discard,pri=5 0 0\n'
+            '/dev/sdb2 none swap defaults 0 0\n'
+            '/swap\\040file none swap sw 0 0\n'
+            'LABEL=fast none swap discard=pages 0 0\n'
+            'malformed line\n'))
+        self.assertEqual({
+            os.path.realpath('/dev/disk/by-uuid/abcd'): 'sw,discard,pri=5',
+            os.path.realpath('/dev/sdb2'): 'defaults',
+            os.path.realpath('/swap file'): 'sw',
+            os.path.realpath('/dev/disk/by-label/fast'): 'discard=pages'},
+            _fstab_swap_options(fstab))
+        self.assertEqual({}, _fstab_swap_options(fstab + '.missing'))
+
+    @common.skipUnlessLinux
+    def test_fstab_swap_options_invalid_path(self):
+        header = 'Filename\tType\tSize\tUsed\tPriority\n'
+        swapon = General.resolve_exe('swapon')
+        directory = self.mkdtemp()
+        for nul in ('\x00', r'\000'):
+            with self.subTest(nul=nul):
+                fstab = self.write_file(os.path.join(directory, 'fstab'), text=(
+                    '/first-swap none swap defaults 0 0\n'
+                    f'/bad{nul}swap none swap sw 0 0\n'
+                    f'UUID=bad{nul}uuid none swap sw 0 0\n'
+                    '/last-swap none swap sw,discard 0 0\n'))
+                with mock.patch('bleachbit.Memory._', side_effect=lambda s: s), \
+                        mock.patch('bleachbit.Memory.get_proc_swaps', return_value=header), \
+                        mock.patch('bleachbit.Memory._fstab_swap_options',
+                                   side_effect=lambda fstab=fstab: _fstab_swap_options(fstab)), \
+                        mock.patch('bleachbit.Memory.General.run_external',
+                                   return_value=(0, '', '')) as mock_run:
+                    enable_swap_linux(header + (
+                        '/first-swap\tfile\t1024\t0\t-2\n'
+                        '/last-swap\tfile\t1024\t0\t-3\n'))
+                    self.assertEqual(mock_run.call_args_list, [
+                        mock.call([swapon, '-o', 'defaults', '/first-swap']),
+                        mock.call([swapon, '-o', 'sw,discard', '/last-swap'])])
+                self.assertEqual(_fstab_swap_options(fstab), {
+                    os.path.realpath('/first-swap'): 'defaults',
+                    os.path.realpath('/last-swap'): 'sw,discard'})
+
+    @common.skipIfWindows
+    def test_get_swap_size_linux_errors(self):
+        """Test for get_swap_size_linux() error paths"""
+        # Malformed header
+        self.assertRaisesRegex(
+            RuntimeError, 'Unexpected first line',
+            get_swap_size_linux, '/dev/sda1', 'bad header\n')
+
+        # Missing device
+        proc_swaps = (
+            'Filename\tType\tSize\tUsed\tPriority\n'
+            '/dev/sda2\tpartition\t123\t0\t-2\n'
+            '/swap\\040file\tfile\t456\t0\t-3\n'
+        )
+        self.assertRaisesRegex(
+            RuntimeError, 'cannot find size of swap device',
+            get_swap_size_linux, '/dev/sda1', proc_swaps)
+        self.assertEqual(
+            get_swap_size_linux('/swap file', proc_swaps), 456 * 1024)
+
+    @common.skipIfWindows
+    def test_wipe_swap_linux(self):
+        """Test for wipe_swap_linux() with mocks"""
+        # devices is None - early return
+        wipe_swap_linux(None, '')
+
+        # Swap still in use
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=1):
+            self.assertRaisesRegex(
+                RuntimeError, 'Cannot wipe swap while it is in use',
+                wipe_swap_linux, ['/dev/sda1'], '')
+
+        # Safety limit exceeded
+        safety_limit = 29 * 1024 ** 3
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=0):
+            with mock.patch('bleachbit.Memory.get_swap_size_linux', return_value=safety_limit + 1):
+                self.assertRaisesRegex(
+                    RuntimeError, 'larger .* than expected',
+                    wipe_swap_linux, ['/dev/sda1'], '')
+
+        # UUID preservation
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=0):
+            with mock.patch('bleachbit.Memory.get_swap_size_linux', return_value=1024 ** 2):
+                with mock.patch('bleachbit.Memory.get_swap_uuid', return_value='abc-123'):
+                    with mock.patch('bleachbit.Memory.wipe_write'):
+                        with mock.patch('bleachbit.Memory.General.run_external', return_value=(0, '', '')) as mock_run:
+                            wipe_swap_linux(['/dev/sda1'], '')
+                            args = mock_run.call_args[0][0]
+                            self.assertIn('-U', args)
+                            self.assertIn('abc-123', args)
+
+        # Label preservation, for LABEL= in /etc/fstab
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=0):
+            with mock.patch('bleachbit.Memory.get_swap_size_linux', return_value=1024 ** 2):
+                with mock.patch('bleachbit.Memory.get_swap_uuid', return_value='abc-123'):
+                    with mock.patch('bleachbit.Memory.get_swap_label', return_value='swap'):
+                        with mock.patch('bleachbit.Memory.wipe_write'):
+                            with mock.patch('bleachbit.Memory.General.run_external', return_value=(0, '', '')) as mock_run:
+                                wipe_swap_linux(['/dev/sda1'], '')
+                                args = mock_run.call_args[0][0]
+                                self.assertEqual(
+                                    args[args.index('-L') + 1], 'swap')
+
+        # /dev/mapper/* symlink is resolved before wipe_write(), which
+        # refuses symlinks
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=0), \
+                mock.patch('bleachbit.Memory.get_swap_size_linux', return_value=1024 ** 2), \
+                mock.patch('bleachbit.Memory.get_swap_uuid', return_value=None), \
+                mock.patch('bleachbit.Memory.get_swap_label', return_value=None), \
+                mock.patch('bleachbit.Memory.os.path.realpath', return_value='/dev/dm-0'), \
+                mock.patch('bleachbit.Memory.wipe_write') as mock_wipe, \
+                mock.patch('bleachbit.Memory.General.run_external', return_value=(0, '', '')):
+            wipe_swap_linux(['/dev/mapper/vg-swap'], '')
+            mock_wipe.assert_called_once_with('/dev/dm-0')
+
+        # mkswap failure
+        with mock.patch('bleachbit.Memory.count_swap_linux', return_value=0):
+            with mock.patch('bleachbit.Memory.get_swap_size_linux', return_value=1024 ** 2):
+                with mock.patch('bleachbit.Memory.get_swap_uuid', return_value=None):
+                    with mock.patch('bleachbit.Memory.wipe_write'):
+                        with mock.patch('bleachbit.Memory.General.run_external', return_value=(1, '', 'mkswap failed')):
+                            self.assertRaisesRegex(
+                                RuntimeError, 'mkswap failed',
+                                wipe_swap_linux, ['/dev/sda1'], '')
+
+    @common.skipUnlessLinux
+    def test_wipe_memory(self):
+        """Test for wipe_memory() with mocks"""
+        # Command missing
+        with mock.patch('bleachbit.FileUtilities.exe_exists', return_value=False):
+            gen = wipe_memory()
+            self.assertRaisesRegex(
+                RuntimeError,
+                f"Command {General.resolve_exe('swapon')} not found",
+                next, gen)
+
+        # Happy path via the fork fallback (systemd-run path disabled)
+        self._assert_wipe_memory_happy_path(
+            scope_return=None, fork_return=0, fork_called=True)
+
+        # Happy path via the systemd scope (fork fallback not used)
+        self._assert_wipe_memory_happy_path(
+            scope_return=0, fork_return=None, fork_called=False)
+
+    @common.skipUnlessLinux
+    def test_wipe_memory_reenables_swap(self):
+        """wipe_memory() turns swap back on after an error or an abort"""
+        with mock.patch('bleachbit.Memory._', side_effect=lambda s: s), \
+                mock.patch('bleachbit.FileUtilities.exe_exists', return_value=True), \
+                mock.patch('bleachbit.Memory.get_proc_swaps', return_value=''):
+            # swapoff fails partway
+            with mock.patch('bleachbit.Memory.disable_swap_linux',
+                            side_effect=RuntimeError('swapoff failed')), \
+                    mock.patch('bleachbit.Memory.enable_swap_linux') as mock_enable:
+                self.assertRaisesRegex(
+                    RuntimeError, 'swapoff failed', next, wipe_memory())
+                mock_enable.assert_called_once()
+
+            with mock.patch('bleachbit.Memory.disable_swap_linux',
+                            return_value=['/dev/sda1']):
+                # Wiping fails, for example on the size limit
+                with mock.patch('bleachbit.Memory.wipe_swap_linux',
+                                side_effect=RuntimeError('too large')), \
+                        mock.patch('bleachbit.Memory.enable_swap_linux') as mock_enable:
+                    gen = wipe_memory()
+                    self.assertTrue(next(gen))
+                    self.assertRaisesRegex(
+                        RuntimeError, 'too large', next, gen)
+                    mock_enable.assert_called_once()
+
+                # The user aborts at either yield
+                for n_yields in (1, 2):
+                    with mock.patch('bleachbit.Memory.wipe_swap_linux'), \
+                            mock.patch('bleachbit.Memory.enable_swap_linux') as mock_enable:
+                        gen = wipe_memory()
+                        for _i in range(n_yields):
+                            self.assertTrue(next(gen))
+                        mock_enable.assert_not_called()
+                        gen.close()
+                        mock_enable.assert_called_once()
+
+                # swapon fails too, which must not hide the error or abort
+                swapon_failed = RuntimeError('swapon failed')
+                with mock.patch('bleachbit.Memory.wipe_swap_linux',
+                                side_effect=RuntimeError('too large')), \
+                        mock.patch('bleachbit.Memory.enable_swap_linux',
+                                   side_effect=swapon_failed), \
+                        self.assertLogs('bleachbit.Memory', level='ERROR'):
+                    gen = wipe_memory()
+                    self.assertTrue(next(gen))
+                    self.assertRaisesRegex(
+                        RuntimeError, 'too large', next, gen)
+                with mock.patch('bleachbit.Memory.wipe_swap_linux'), \
+                        mock.patch('bleachbit.Memory.enable_swap_linux',
+                                   side_effect=swapon_failed), \
+                        self.assertLogs('bleachbit.Memory', level='ERROR'):
+                    gen = wipe_memory()
+                    self.assertTrue(next(gen))
+                    gen.close()
+
+    @common.skipIfWindows
+    def test_memory_child_script(self):
+        """Test for _memory_child_script()"""
+        script = _memory_child_script(1000)
+        self.assertIn('make_self_oom_target_linux(1000)', script)
+        self.assertIn('fill_memory_linux()', script)
+        # None uid renders as the literal None
+        script_none = _memory_child_script(None)
+        self.assertIn('make_self_oom_target_linux(None)', script_none)
+
+    @common.skipIfWindows
+    def test_run_memory_child_systemd_scope_missing(self):
+        """_run_memory_child_systemd_scope() returns None without systemd-run"""
+        with mock.patch('bleachbit.FileUtilities.exe_exists', return_value=False):
+            self.assertIsNone(_run_memory_child_systemd_scope())
+
+    @common.skipIfWindows
+    def test_run_memory_child_systemd_scope_unique_unit(self):
+        """_run_memory_child_systemd_scope() uses a PID-suffixed unit name"""
+        captured = {}
+
+        # pylint: disable-next=unused-argument
+        def fake_run(args, env=None, **kwargs):
+            captured['args'] = args
+            captured['kwargs'] = kwargs
+            proc = mock.Mock()
+            proc.returncode = 0
+            proc.stderr = ''
+            return proc
+
+        with self._mock_systemd_scope_common():
+            with mock.patch('bleachbit.Memory.subprocess.run', side_effect=fake_run):
+                _run_memory_child_systemd_scope()
+        unit_args = [a for a in captured['args'] if a.startswith('--unit=')]
+        self.assertEqual(len(unit_args), 1)
+        self.assertIn(f'bleachbit-wipe-memory-{os.getpid()}', unit_args[0])
+
+    @common.skipIfWindows
+    def test_run_memory_child_systemd_scope_sanitizes_env(self):
+        """The root child gets a fixed PYTHONPATH and a safe cwd, not the inherited env"""
+        import bleachbit.Memory as Memory_mod
+        pkg_parent = os.path.dirname(
+            os.path.dirname(os.path.abspath(Memory_mod.__file__)))
+        captured = {}
+
+        # pylint: disable-next=unused-argument
+        def fake_run(args, env=None, **kwargs):
+            captured['env'] = env
+            captured['kwargs'] = kwargs
+            proc = mock.Mock()
+            proc.returncode = 0
+            proc.stderr = ''
+            return proc
+
+        with self._mock_systemd_scope_common():
+            with mock.patch.dict(os.environ,
+                                 {'PYTHONPATH': '/tmp/attacker'}):
+                with mock.patch('bleachbit.Memory.subprocess.run',
+                                side_effect=fake_run):
+                    _run_memory_child_systemd_scope()
+        self.assertEqual(captured['env']['PYTHONPATH'], pkg_parent)
+        self.assertNotIn('/tmp/attacker', captured['env']['PYTHONPATH'])
+        self.assertEqual(captured['kwargs'].get('cwd'), pkg_parent)
+
+    @common.skipIfWindows
+    def test_run_memory_child_systemd_scope_signal(self):
+        """_run_memory_child_systemd_scope() normalizes signal exit codes"""
+        # subprocess.run reports -N when its direct child is killed by signal N.
+        # A shell instead exposes this as status 128+N (for SIGKILL, 137), so
+        # do not model a shell-observed 137 as subprocess signal termination.
+        mock_proc = mock.Mock()
+        mock_proc.returncode = -9
+        mock_proc.stderr = ''
+        with self._mock_systemd_scope_common():
+            with mock.patch('bleachbit.Memory.subprocess.run', return_value=mock_proc):
+                self.assertEqual(_run_memory_child_systemd_scope(), 9)
+        # Normal exit
+        mock_proc.returncode = 0
+        with self._mock_systemd_scope_common():
+            with mock.patch('bleachbit.Memory.subprocess.run', return_value=mock_proc):
+                self.assertEqual(_run_memory_child_systemd_scope(), 0)
+
+    @common.skipIfWindows
+    def test_run_memory_child_systemd_scope_without_oom_policy(self):
+        """Retry without OOMPolicy when scope units do not support it"""
+        unsupported_proc = mock.Mock()
+        unsupported_proc.returncode = 1
+        unsupported_proc.stderr = 'Unknown property OOMPolicy\n'
+        success_proc = mock.Mock()
+        success_proc.returncode = 0
+        success_proc.stderr = ''
+        with self._mock_systemd_scope_common():
+            with mock.patch(
+                    'bleachbit.Memory.subprocess.run',
+                    side_effect=(unsupported_proc, success_proc)) as mock_run:
+                self.assertEqual(_run_memory_child_systemd_scope(), 0)
+        self.assertEqual(mock_run.call_count, 2)
+        self.assertIn('--property=OOMPolicy=kill',
+                      mock_run.call_args_list[0].args[0])
+        self.assertNotIn('--property=OOMPolicy=kill',
+                         mock_run.call_args_list[1].args[0])
+
+    @common.skipIfWindows
+    def test_run_memory_child_systemd_scope_runtime_failure(self):
+        """_run_memory_child_systemd_scope() falls back when systemd-run fails
+
+        A non-zero, non-signal exit code means systemd-run itself failed
+        (e.g. no systemd as PID 1, no D-Bus session) and the child never
+        ran -- the function returns None so the caller can fall back to
+        fork().
+        """
+        mock_proc = mock.Mock()
+        mock_proc.returncode = 1
+        mock_proc.stderr = 'Failed to start transient scope unit: Access denied\n'
+        with self._mock_systemd_scope_common():
+            with mock.patch('bleachbit.Memory.subprocess.run', return_value=mock_proc) as mock_run:
+                with mock.patch('bleachbit.Memory.logger') as mock_logger:
+                    self.assertIsNone(_run_memory_child_systemd_scope())
+                    mock_run.assert_called_once()
+                    self.assertTrue(
+                        mock_run.call_args.kwargs.get('capture_output'))
+                    debug_msgs = [
+                        call.args[0] % call.args[1:]
+                        if call.args else ''
+                        for call in mock_logger.debug.call_args_list
+                    ]
+                    self.assertTrue(
+                        any('Access denied' in msg for msg in debug_msgs),
+                        debug_msgs)
+        # A high exit code (e.g. 137) is treated as a plain failure, not a
+        # signal, since subprocess.run already reports signals as -N.
+        mock_proc.returncode = 137
+        mock_proc.stderr = ''
+        with self._mock_systemd_scope_common():
+            with mock.patch('bleachbit.Memory.subprocess.run', return_value=mock_proc):
+                self.assertIsNone(_run_memory_child_systemd_scope())
+
+    @common.skipIfWindows
+    def test_run_memory_child_fork_child_path(self):
+        """_run_memory_child_fork() child path calls the right functions and exits"""
+        mock_oom = self._run_fork_child_path(return_value=1000)
+        mock_oom.assert_called_once_with(1000)
+
+    @common.skipIfWindows
+    def test_run_memory_child_fork_normal_exit(self):
+        """_run_memory_child_fork() returns 0 when child exits normally"""
+        self._assert_fork_exit_status(0, 0)
+
+    @common.skipIfWindows
+    def test_run_memory_child_fork_signal(self):
+        """_run_memory_child_fork() returns signal number when child is killed"""
+        self._assert_fork_exit_status(9, 9)
+
+    @common.skipIfWindows
+    def test_run_memory_child_fork_nonzero_exit(self):
+        """_run_memory_child_fork() returns a non-zero exit code"""
+        self._assert_fork_exit_status(1 << 8, 1)
+
+    @common.skipIfWindows
+    def test_run_memory_child_fork_uid_exception(self):
+        """_run_memory_child_fork() falls back to None when get_real_uid fails"""
+        mock_oom = self._run_fork_child_path(side_effect=Exception('boom'))
+        mock_oom.assert_called_once_with(None)
+
+    @common.skipUnlessLinux
+    def test_run_memory_child_fork_failure(self):
+        """A real forked child must not restore swap or unwind into its caller"""
+        script = textwrap.dedent("""
+            import builtins
+            import os
+            import sys
+            from unittest import mock
+            from bleachbit import Memory
+
+            cleanup_path, stage, error_name = sys.argv[1:]
+            parent_pid = os.getpid()
+
+            def record_cleanup(_swaps):
+                with open(cleanup_path, 'a', encoding='ascii') as stream:
+                    stream.write(str(os.getpid()) + '\\n')
+
+            with mock.patch.object(Memory, '_', side_effect=lambda s: s), \\
+                    mock.patch.object(Memory.FileUtilities, 'exe_exists', return_value=True), \\
+                    mock.patch.object(Memory, 'get_proc_swaps', return_value=''), \\
+                    mock.patch.object(Memory, 'disable_swap_linux', return_value=[]), \\
+                    mock.patch.object(Memory, 'wipe_swap_linux'), \\
+                    mock.patch.object(Memory, 'enable_swap_linux', side_effect=record_cleanup), \\
+                    mock.patch.object(Memory, '_run_memory_child_systemd_scope', return_value=None), \\
+                    mock.patch.object(Memory, 'make_self_oom_target_linux'), \\
+                    mock.patch.object(Memory, 'fill_memory_linux'), \\
+                    mock.patch.object(Memory, 'logger') as logger:
+                getattr(Memory, stage).side_effect = getattr(builtins, error_name)('child failed')
+                try:
+                    result = list(Memory.wipe_memory())
+                except BaseException:
+                    os._exit(42)
+                with open(cleanup_path, encoding='ascii') as stream:
+                    cleanup_pids = stream.read().splitlines()
+                assert cleanup_pids == [str(parent_pid)], cleanup_pids
+                assert result == [True, True, 0], result
+                logger.warning.assert_called_once_with(
+                    'The child memory-wiping process returned code %d.', 1)
+        """)
+        for stage in ('make_self_oom_target_linux', 'fill_memory_linux'):
+            for error in ('RuntimeError', 'MemoryError', 'KeyboardInterrupt',
+                          'SystemExit', 'GeneratorExit'):
+                with self.subTest(stage=stage, error=error):
+                    cleanup_path = os.path.join(
+                        self.tempdir, f'cleanup-{stage}-{error}')
+                    proc = subprocess.run(
+                        [sys.executable, '-c', script, cleanup_path, stage, error],
+                        capture_output=True, text=True, timeout=30, check=False)
+                    self.assertEqual(proc.returncode, 0,
+                                     proc.stdout + proc.stderr)
+
+    @common.skipUnlessLinux
+    def test_run_memory_child_fork_logging_failure(self):
+        """Even a failure reporting the child error must terminate the child"""
+        with mock.patch('bleachbit.Memory.General.get_real_uid', return_value=1000), \
+                mock.patch('os.fork', return_value=0), \
+                mock.patch('bleachbit.Memory.make_self_oom_target_linux'), \
+                mock.patch('bleachbit.Memory.fill_memory_linux',
+                           side_effect=MemoryError), \
+                mock.patch('bleachbit.Memory.logger.exception',
+                           side_effect=MemoryError) as mock_log, \
+                mock.patch('os._exit', side_effect=SystemExit) as mock_exit, \
+                mock.patch('os.waitpid') as mock_wait:
+            with self.assertRaises(SystemExit):
+                _run_memory_child_fork()
+        mock_log.assert_called_once_with(
+            'Error in memory-wiping child process')
+        mock_exit.assert_called_once_with(1)
+        mock_wait.assert_not_called()
 
     @common.skipIfWindows
     def test_swap_off_swap_on(self):
         """Test for disabling and enabling swap"""
         if not common.have_root():
             self.skipTest('not enough privileges')
+        proc_swaps = get_proc_swaps()
         disable_swap_linux()
-        enable_swap_linux()
+        enable_swap_linux(proc_swaps)

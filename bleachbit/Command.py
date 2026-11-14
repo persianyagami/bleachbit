@@ -1,7 +1,7 @@
 # vim: ts=4:sw=4:expandtab
 
 # BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
+# Copyright (C) 2008-2025 Andrew Ziem
 # https://www.bleachbit.org
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,39 +15,46 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
 """
 Command design pattern implementation for cleaning
+
+Standard clean up commands are Delete, Truncate and Shred. Everything
+else is counted as special commands: run any external process, edit
+JSON or INI file, delete registry key, edit SQLite3 database, etc.
 """
 
-from bleachbit import _
-from bleachbit import FileUtilities
-
+import errno
 import logging
 import os
 import types
+import warnings
 
-from sqlite3 import DatabaseError
+from bleachbit import FileUtilities, IS_WINDOWS
+from bleachbit.Constant import CLEAN_FILE_LABEL
+from bleachbit.Language import get_text as _
 
-if 'nt' == os.name:
+if IS_WINDOWS:
     import bleachbit.Windows
 else:
+    # pylint: disable-next=redefined-builtin
     from bleachbit.General import WindowsError
 
+logger = logging.getLogger(__name__)
 
-def whitelist(path):
-    """Return information that this file was whitelisted"""
-    ret = {
-        # TRANSLATORS: This is the label in the log indicating was
-        # skipped because it matches the whitelist
+
+def ret_keep_list(path):
+    """Return information that this file matched by keep list"""
+    return {
+        # TRANSLATORS: This is the label in the log indicating a path
+        # was skipped because it matches the keep list
         'label': _('Skip'),
         'n_deleted': 0,
         'n_special': 0,
         'path': path,
         'size': 0}
-    return ret
 
 
 class Delete:
@@ -55,78 +62,166 @@ class Delete:
     """Delete a single file or directory.  Obey the user
     preference regarding shredding."""
 
-    def __init__(self, path):
+    def __init__(self, path, shred=False, top=None):
         """Create a Delete instance to delete 'path'"""
         self.path = path
-        self.shred = False
+        self.shred = shred
+        self.top = top
 
     def __str__(self):
-        return 'Command to %s %s' % \
-            ('shred' if self.shred else 'delete', self.path)
+        return f'Command to {"shred" if self.shred else "delete"} {self.path}'
 
     def execute(self, really_delete):
         """Make changes and return results"""
         if FileUtilities.whitelisted(self.path):
-            yield whitelist(self.path)
+            yield ret_keep_list(self.path)
             return
+        # A directory scan on Windows already read the size
+        size = getattr(self.path, 'scan_size', None)
+        if size is None:
+            try:
+                size = FileUtilities.getsize(self.path)
+            except PermissionError:
+                size = None
+            except Exception as e:
+                # Handle Windows-specific pywintypes.error
+                # pywintypes.error: (5, 'FindFirstFileW', 'Access is denied.')
+                # Use a truthy check rather than hasattr(): on Windows every
+                # OSError carries a winerror attribute, sometimes None.
+                if getattr(e, 'winerror', None):
+                    size = None
+                else:
+                    raise
         ret = {
-            # TRANSLATORS: This is the label in the log indicating will be
-            # deleted (for previews) or was actually deleted
+            # TRANSLATORS: Label in the log indicating a path will be deleted
+            # (for previews) or was actually deleted (clean mode).
             'label': _('Delete'),
             'n_deleted': 1,
             'n_special': 0,
             'path': self.path,
-            'size': FileUtilities.getsize(self.path)}
+            'size': size}
         if really_delete:
             try:
-                FileUtilities.delete(self.path, self.shred)
+                deleted = FileUtilities.delete(
+                    self.path, self.shred, top=self.top)
+            # pylint: disable-next=possibly-used-before-assignment
             except WindowsError as e:
                 # WindowsError: [Error 32] The process cannot access the file because it is being
                 # used by another process: 'C:\\Documents and
                 # Settings\\username\\Cookies\\index.dat'
-                if 32 != e.winerror and 5 != e.winerror:
+                if not e.winerror == 32:
                     raise
-                try:
-                    bleachbit.Windows.delete_locked_file(self.path)
-                except:
-                    raise
-                else:
-                    if self.shred:
-                        import warnings
-                        warnings.warn(
-                            _('At least one file was locked by another process, so its contents could not be overwritten. It will be marked for deletion upon system reboot.'))
-                    # TRANSLATORS: The file will be deleted when the
-                    # system reboots
-                    ret['label'] = _('Mark for deletion')
+
+                # Like delete(), use the \\?\ path so long paths work
+                # pylint: disable-next=possibly-used-before-assignment
+                bleachbit.Windows.delete_locked_file(
+                    FileUtilities.extended_path(self.path))
+
+                # delete() also shreds when the global option is on
+                from bleachbit.Options import options
+                if self.shred or options.get('shred'):
+                    warnings.warn(
+                        # TRANSLATORS: Warning message shown in the progress log.
+                        _('At least one file was locked by another process, '
+                          'so its contents could not be overwritten. '
+                          'It will be marked for deletion upon system reboot.'))
+                # TRANSLATORS: Label in the log when the file will be deleted
+                # when the system reboots. 'Mark' is a verb.
+                ret['label'] = _('Mark for deletion')
+            else:
+                if not deleted:
+                    ret['n_deleted'] = 0
+                    ret['size'] = 0
         yield ret
+
+
+class DeleteRecycleBinMetadata(Delete):
+
+    """Delete a recycle-bin record only after its payload has disappeared."""
+
+    def __init__(self, path, payload):
+        super().__init__(path)
+        self.payload = payload
+
+    def execute(self, really_delete):
+        if FileUtilities.whitelisted(self.payload):
+            yield ret_keep_list(self.path)
+            return
+        if really_delete:
+            try:
+                os.lstat(FileUtilities.extended_path(self.payload))
+            except FileNotFoundError:
+                pass
+            else:
+                # This also preserves restore information for kept descendants
+                # and for payloads whose deletion failed or awaits a reboot.
+                return
+        try:
+            os.lstat(FileUtilities.extended_path(self.path))
+        except FileNotFoundError:
+            return
+        yield from super().execute(really_delete)
+
+
+class Fail:
+
+    """Report an action that cannot run, so the Worker counts an error"""
+
+    def __init__(self, message):
+        self.message = message
+
+    def __str__(self):
+        return self.message
+
+    # pylint: disable-next=unused-argument
+    def execute(self, really_delete):
+        """Raise in both preview and clean mode"""
+        raise RuntimeError(self.message)
+        # pylint: disable-next=unreachable
+        yield  # a generator like the other commands
 
 
 class Function:
 
     """Execute a simple Python function"""
 
-    def __init__(self, path, func, label):
-        """Path is a pathname that exists or None.  If
-        it exists, func takes the pathname.  Otherwise,
-        function returns the size."""
+    def __init__(self, path, func, label, preview_func=None):
+        """Initialize a Function command
+
+        Parameters:
+            path (str or None): Path to file or None if function doesn't operate on a file
+            func (function): Function to execute that takes path or returns size
+            label (str): Label for display in the UI
+            preview_func (function, optional): Function to call in preview mode
+
+        func takes the path when path is set and no arguments when it is
+        None. preview_func always takes no arguments. Both return an integer.
+        """
         self.path = path
         self.func = func
         self.label = label
-        try:
-            assert isinstance(func, types.FunctionType)
-        except AssertionError:
-            raise AssertionError('Expected MethodType but got %s' % type(func))
+        self.preview_func = preview_func
+        assert isinstance(path, (str, type(None)))
+        if not isinstance(func, types.FunctionType):
+            raise TypeError(
+                f'Expected FunctionType for func but got {type(func)}')
+        assert isinstance(label, str)
+        if not isinstance(preview_func, (types.FunctionType, type(None))):
+            raise TypeError(
+                f'Expected FunctionType or None for preview_func but got {type(preview_func)}')
 
     def __str__(self):
         if self.path:
-            return 'Function: %s: %s' % (self.label, self.path)
-        else:
-            return 'Function: %s' % (self.label)
+            return f'Function: {self.label}: {self.path}'
+        return f'Function: {self.label}'
 
     def execute(self, really_delete):
+        """Execute the function and return results"""
 
+        # In FreeBSD, sqlite3 is a separate package
+        import sqlite3
         if self.path is not None and FileUtilities.whitelisted(self.path):
-            yield whitelist(self.path)
+            yield ret_keep_list(self.path)
             return
 
         ret = {
@@ -136,14 +231,23 @@ class Function:
             'path': self.path,
             'size': None}
 
-        if really_delete:
+        if not really_delete and self.preview_func is not None:
+            # Preview mode: call preview function to get list of items that would be deleted
+            try:
+                preview_items = self.preview_func()
+                if isinstance(preview_items, int):
+                    ret['size'] = preview_items
+            except Exception as e:
+                logger.warning('Preview function failed: %s', e)
+                ret['size'] = 0
+        elif really_delete:
             if self.path is None:
                 # Function takes no path.  It returns the size.
                 func_ret = self.func()
                 if isinstance(func_ret, types.GeneratorType):
                     # function returned generator
-                    for func_ret in self.func():
-                        if True == func_ret or isinstance(func_ret, tuple):
+                    for func_ret in func_ret:
+                        if func_ret is True or isinstance(func_ret, tuple):
                             # Return control to GTK idle loop.
                             # If tuple, then display progress.
                             yield func_ret
@@ -152,23 +256,25 @@ class Function:
                 ret['size'] = func_ret
             else:
                 if os.path.isdir(self.path):
-                    raise RuntimeError('Attempting to run file function %s on directory %s' %
-                                       (self.func.__name__, self.path))
+                    raise RuntimeError(
+                        f'Attempting to run file function {self.func.__name__} on directory {self.path}')
                 # Function takes a path.  We check the size.
                 oldsize = FileUtilities.getsize(self.path)
+
                 try:
                     self.func(self.path)
-                except DatabaseError as e:
-                    if -1 == e.message.find('file is encrypted or is not a database') and \
-                       -1 == e.message.find('or missing database'):
-                        raise
-                    logging.getLogger(__name__).exception(e.message)
-                    return
+                except sqlite3.DatabaseError as e:
+                    # Firefox version 140 added a collation sequence that
+                    # cannot be vacuumed.
+                    # https://github.com/bleachbit/bleachbit/issues/1866
+                    if 'no such collation sequence' in str(e):
+                        logger.debug(str(e))
+                        return
+                    raise
                 try:
                     newsize = FileUtilities.getsize(self.path)
                 except OSError as e:
-                    from errno import ENOENT
-                    if e.errno == ENOENT:
+                    if e.errno == errno.ENOENT:
                         # file does not exist
                         newsize = 0
                     else:
@@ -177,7 +283,36 @@ class Function:
         yield ret
 
 
-class Ini:
+class ConfigFile:
+
+    """Base for commands that shrink a configuration file in place"""
+
+    def _clean(self):
+        """Rewrite the file without the targeted content"""
+        raise NotImplementedError
+
+    def execute(self, really_delete):
+        """Make changes and return results"""
+
+        if FileUtilities.whitelisted(self.path):
+            yield ret_keep_list(self.path)
+            return
+
+        ret = {
+            'label': CLEAN_FILE_LABEL,
+            'n_deleted': 0,
+            'n_special': 1,
+            'path': self.path,
+            'size': None}
+        if really_delete:
+            oldsize = FileUtilities.getsize(self.path)
+            self._clean()
+            newsize = FileUtilities.getsize(self.path)
+            ret['size'] = oldsize - newsize
+        yield ret
+
+
+class Ini(ConfigFile):
 
     """Remove sections or parameters from a .ini file"""
 
@@ -188,32 +323,13 @@ class Ini:
         self.parameter = parameter
 
     def __str__(self):
-        return 'Command to clean .ini path=%s, section=%s, parameter=%s ' % \
-            (self.path, self.section, self.parameter)
+        return f'Command to clean .ini path={self.path}, section={self.section}, parameter={self.parameter} '
 
-    def execute(self, really_delete):
-        """Make changes and return results"""
-
-        if FileUtilities.whitelisted(self.path):
-            yield whitelist(self.path)
-            return
-
-        ret = {
-            # TRANSLATORS: Parts of this file will be deleted
-            'label': _('Clean file'),
-            'n_deleted': 0,
-            'n_special': 1,
-            'path': self.path,
-            'size': None}
-        if really_delete:
-            oldsize = FileUtilities.getsize(self.path)
-            FileUtilities.clean_ini(self.path, self.section, self.parameter)
-            newsize = FileUtilities.getsize(self.path)
-            ret['size'] = oldsize - newsize
-        yield ret
+    def _clean(self):
+        FileUtilities.clean_ini(self.path, self.section, self.parameter)
 
 
-class Json:
+class Json(ConfigFile):
 
     """Remove a key from a JSON configuration file"""
 
@@ -223,28 +339,10 @@ class Json:
         self.address = address
 
     def __str__(self):
-        return 'Command to clean JSON file, path=%s, address=%s ' % \
-            (self.path, self.address)
+        return f'Command to clean JSON file, path={self.path}, address={self.address} '
 
-    def execute(self, really_delete):
-        """Make changes and return results"""
-
-        if FileUtilities.whitelisted(self.path):
-            yield whitelist(self.path)
-            return
-
-        ret = {
-            'label': _('Clean file'),
-            'n_deleted': 0,
-            'n_special': 1,
-            'path': self.path,
-            'size': None}
-        if really_delete:
-            oldsize = FileUtilities.getsize(self.path)
-            FileUtilities.clean_json(self.path, self.address)
-            newsize = FileUtilities.getsize(self.path)
-            ret['size'] = oldsize - newsize
-        yield ret
+    def _clean(self):
+        FileUtilities.clean_json(self.path, self.address)
 
 
 class Shred(Delete):
@@ -253,11 +351,10 @@ class Shred(Delete):
 
     def __init__(self, path):
         """Create an instance to shred 'path'"""
-        Delete.__init__(self, path)
-        self.shred = True
+        Delete.__init__(self, path, shred=True)
 
     def __str__(self):
-        return 'Command to shred %s' % self.path
+        return f'Command to shred {self.path}'
 
 
 class Truncate(Delete):
@@ -265,13 +362,13 @@ class Truncate(Delete):
     """Truncate a single file"""
 
     def __str__(self):
-        return 'Command to truncate %s' % self.path
+        return f'Command to truncate {self.path}'
 
     def execute(self, really_delete):
         """Make changes and return results"""
 
         if FileUtilities.whitelisted(self.path):
-            yield whitelist(self.path)
+            yield ret_keep_list(self.path)
             return
 
         ret = {
@@ -282,8 +379,7 @@ class Truncate(Delete):
             'path': self.path,
             'size': FileUtilities.getsize(self.path)}
         if really_delete:
-            with open(self.path, 'w') as f:
-                f.truncate(0)
+            FileUtilities.truncate_file(self.path)
         yield ret
 
 
@@ -291,27 +387,26 @@ class Winreg:
 
     """Clean Windows registry"""
 
-    def __init__(self, keyname, valuename):
+    def __init__(self, keyname, valuename, excludekeys=None):
         """Create the Windows registry cleaner"""
         self.keyname = keyname
         self.valuename = valuename
+        self.excludekeys = excludekeys or []
 
     def __str__(self):
-        return 'Command to clean registry, key=%s, value=%s ' % (self.keyname, self.valuename)
+        return f'Command to clean registry, key={self.keyname}, value={self.valuename}'
 
     def execute(self, really_delete):
         """Execute the Windows registry cleaner"""
-        if 'nt' != os.name:
+        if not IS_WINDOWS:
             return
-        _str = None  # string representation
-        ret = None  # return value meaning 'deleted' or 'delete-able'
         if self.valuename:
-            _str = '%s<%s>' % (self.keyname, self.valuename)
+            _str = f'{self.keyname}<{self.valuename}>'
             ret = bleachbit.Windows.delete_registry_value(self.keyname,
                                                           self.valuename, really_delete)
         else:
             ret = bleachbit.Windows.delete_registry_key(
-                self.keyname, really_delete)
+                self.keyname, really_delete, self.excludekeys)
             _str = self.keyname
         if not ret:
             # Nothing to delete or nothing was deleted.  This return
@@ -319,6 +414,7 @@ class Winreg:
             return
 
         ret = {
+            # TRANSLATORS: A label of a command to delete a Windows registry key
             'label': _('Delete registry key'),
             'n_deleted': 0,
             'n_special': 1,

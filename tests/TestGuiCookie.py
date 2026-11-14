@@ -1,0 +1,238 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
+#
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
+
+"""
+Test case for module GuiCookie
+"""
+
+# These tests reach into internals on purpose.
+# pylint: disable=protected-access
+
+import gc
+import json
+import os
+import types
+import unittest
+import weakref
+from unittest import mock
+
+from tests import common
+
+import bleachbit
+from bleachbit import General, IS_WINDOWS
+from bleachbit.Cookie import COOKIE_KEEP_LIST_FILENAME
+from bleachbit.GtkShim import is_gtk_available
+
+HAVE_GTK = is_gtk_available()
+if HAVE_GTK:
+    from bleachbit.GtkShim import Gtk
+    from bleachbit.GuiCookie import CookieManagerPane
+
+
+@unittest.skipUnless(HAVE_GTK, 'requires GTK+ module and a display environment')
+class GuiCookieTestCase(common.BleachbitTestCase):
+    """Test case for CookieManagerPane"""
+
+    def _fake_pane(self, keep_list_path, domains):
+        """A minimal stand-in for CookieManagerPane, avoiding a real Gtk widget."""
+        return types.SimpleNamespace(
+            keep_list_path=keep_list_path,
+            _iter_selected_domains=lambda: iter(domains))
+
+    def test_save_changes_refuses_symlink(self):
+        """save_changes() must not write the keep list through a symlink"""
+        filename = self.write_file(
+            'cookie_keep_list_target.json', text='["keepme.example"]')
+        pane = self._fake_pane(filename, ['evil.example'])
+        with mock.patch('bleachbit.FileUtilities.os.path.islink',
+                        side_effect=lambda p: p == filename):
+            # pylint: disable-next=possibly-used-before-assignment
+            result = CookieManagerPane.save_changes(pane)
+        self.assertFalse(result)
+        with open(filename, encoding='utf-8') as f:
+            self.assertEqual(json.load(f), ['keepme.example'])
+
+    @common.also_with_sudo
+    def test_save_changes_still_works(self):
+        """save_changes() still writes the sorted keep list normally"""
+        filename = os.path.join(self.tempdir, 'cookie_keep_list.json')
+        pane = self._fake_pane(filename, ['b.example', 'a.example'])
+        result = CookieManagerPane.save_changes(pane)
+        self.assertTrue(result)
+        with open(filename, encoding='utf-8') as f:
+            self.assertEqual(json.load(f), ['a.example', 'b.example'])
+        self.assertEqual(pane.saved_domains, {'a.example', 'b.example'})
+        if not IS_WINDOWS:
+            self.assertEqual(os.stat(filename).st_uid,
+                             General.get_real_uid())
+
+    @common.skipIfWindows
+    def test_save_changes_sudo_chown(self):
+        """Creating the keep list in sudo mode chowns it to the user."""
+        filename = os.path.join(self.mkdtemp(), 'cookie_keep_list.json')
+        pane = self._fake_pane(filename, ['a.example'])
+        with mock.patch('bleachbit.General.sudo_mode', return_value=True), \
+                mock.patch('bleachbit.General.chownself') as mock_chown:
+            self.assertTrue(CookieManagerPane.save_changes(pane))
+            mock_chown.assert_called_once_with(filename)
+            mock_chown.reset_mock()
+            # Overwriting an existing file should not chown again
+            self.assertTrue(CookieManagerPane.save_changes(pane))
+            mock_chown.assert_not_called()
+
+    def test_activate_link_stops_default_handler(self):
+        """The 'Learn more' link must not also be opened by GTK"""
+        with mock.patch('bleachbit.GuiCookie.threading.Thread'):
+            pane = CookieManagerPane()
+        # pylint: disable-next=possibly-used-before-assignment
+        window = Gtk.Window()
+        window.add(pane)
+        self.addCleanup(window.destroy)
+        url = 'https://docs.bleachbit.org/'
+        with mock.patch('bleachbit.GuiCookie.open_url') as open_url:
+            handled = pane.on_activate_link(None, url)
+        self.assertTrue(handled)
+        open_url.assert_called_once_with(
+            url, parent_window=window, prompt=True)
+
+    @unittest.skipIf(common.have_root(), 'root users do not get a confirmation')
+    def test_activate_link_confirmation_parent(self):
+        """The real confirmation dialog must be transient for Preferences."""
+        with mock.patch('bleachbit.GuiCookie.threading.Thread'):
+            pane = CookieManagerPane()
+        window = Gtk.Window()
+        window.add(pane)
+        self.addCleanup(window.destroy)
+        dialog_properties = []
+
+        def cancel_dialog(dialog):
+            dialog_properties.append(
+                (dialog.get_transient_for(), dialog.get_modal()))
+            return Gtk.ResponseType.CANCEL
+
+        with mock.patch.object(Gtk.Dialog, 'run', cancel_dialog), \
+                mock.patch('bleachbit.GuiBasic.Gtk.show_uri_on_window') as show_uri:
+            handled = pane.on_activate_link(
+                None, 'https://docs.bleachbit.org/')
+        self.assertTrue(handled)
+        self.assertEqual(dialog_properties, [(window, True)])
+        show_uri.assert_not_called()
+
+    def test_unreadable_keep_list(self):
+        """A corrupt keep list leaves the page usable, and a save replaces it"""
+        keep_path = os.path.join(
+            bleachbit.options_dir, COOKIE_KEEP_LIST_FILENAME)
+        os.makedirs(bleachbit.options_dir, exist_ok=True)
+        self.addCleanup(lambda: os.path.exists(
+            keep_path) and os.remove(keep_path))
+        self.write_file(keep_path, text='["a.example",]')
+
+        with mock.patch('bleachbit.GuiCookie.threading.Thread'), \
+                self.assertLogs('bleachbit.GuiCookie', level='ERROR'):
+            pane = CookieManagerPane()
+        self.assertEqual(pane.saved_domains, set())
+
+        pane._finish_populate(['b.example'])
+        pane.on_select_all_clicked(None)
+        with open(keep_path, encoding='utf-8') as f:
+            self.assertEqual(json.load(f), ['b.example'])
+        pane.destroy()
+
+    def test_columns_do_not_sort_filter_model(self):
+        """A sortable column needs a sortable model, which a filter is not"""
+        with mock.patch('bleachbit.GuiCookie.threading.Thread'):
+            pane = CookieManagerPane()
+        # pylint: disable-next=possibly-used-before-assignment
+        if not isinstance(pane.treeview.get_model(), Gtk.TreeSortable):
+            for column in pane.treeview.get_columns():
+                self.assertEqual(column.get_sort_column_id(), -1)
+        pane.destroy()
+
+    def test_destroyed_pane_is_freed(self):
+        """The cookie filter does not keep a destroyed pane alive"""
+        with mock.patch('bleachbit.GuiCookie.threading.Thread',
+                        lambda **_kwargs: mock.Mock(spec=['start'])):
+            pane = CookieManagerPane()
+        pane._finish_populate(['a.example', 'b.example'])
+        pane.search_entry.set_text('b.')
+        self.assertEqual([row[1] for row in pane.cookie_filter], ['b.example'])
+        pane.selected_toggle.set_active(True)
+        self.assertEqual(list(pane.cookie_filter), [])
+        ref = weakref.ref(pane)
+        pane.destroy()
+        del pane
+        gc.collect()
+        self.assertIsNone(ref())
+
+    def test_discovery_failure_finishes_loading(self):
+        """Any error during cookie discovery still ends the loading state"""
+        class SyncThread:
+            def __init__(self, target=None, daemon=None):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                self.target()
+
+        with mock.patch('bleachbit.GuiCookie.threading.Thread', SyncThread), \
+                mock.patch('bleachbit.GuiCookie.list_unique_cookies',
+                           side_effect=ModuleNotFoundError('sqlite3')), \
+                mock.patch('bleachbit.GuiCookie.GLib.idle_add') as idle_add, \
+                self.assertLogs('bleachbit.GuiCookie', level='ERROR'):
+            pane = CookieManagerPane()
+        idle_add.assert_called_once_with(pane._finish_populate, [])
+        pane.destroy()
+
+    def test_close_during_discovery(self):
+        """Discovery finishing after the pane is closed leaves it alone"""
+        workers = []
+
+        def fake_thread(target, **_kwargs):
+            workers.append(target)
+            return mock.Mock(spec=['start'])
+
+        with mock.patch('bleachbit.GuiCookie.threading.Thread', fake_thread):
+            pane = CookieManagerPane()
+        pane.destroy()
+        with mock.patch('bleachbit.GuiCookie.list_unique_cookies',
+                        return_value=['a.example']), \
+                mock.patch('bleachbit.GuiCookie.GLib.idle_add') as idle_add:
+            workers[0]()
+        idle_add.assert_called_once_with(pane._finish_populate, ['a.example'])
+        self.assertFalse(pane._finish_populate(['a.example']))
+        self.assertEqual(len(pane.cookie_store), 0)
+        self.assertTrue(pane._is_loading)
+
+    def test_saved_padded_host_stays_checked(self):
+        """Whitespace in a saved domain must not create a duplicate row."""
+        keep_path = os.path.join(
+            bleachbit.options_dir, COOKIE_KEEP_LIST_FILENAME)
+        self.write_file(keep_path, text=json.dumps([' \t.Google.COM\n']))
+        self.addCleanup(lambda: os.path.exists(
+            keep_path) and os.remove(keep_path))
+
+        with mock.patch('bleachbit.GuiCookie.threading.Thread'):
+            pane = CookieManagerPane()
+        self.addCleanup(pane.destroy)
+        pane._finish_populate(['.google.com', 'accounts.google.com'])
+        self.assertEqual([tuple(row) for row in pane.cookie_store],
+                         [(False, 'accounts.google.com'), (True, 'google.com')])
+
+    def test_saved_dotted_host_stays_checked(self):
+        """A saved '.example.com' shows as one checked row after reopening"""
+        keep_path = os.path.join(
+            bleachbit.options_dir, COOKIE_KEEP_LIST_FILENAME)
+        os.makedirs(bleachbit.options_dir, exist_ok=True)
+        self.addCleanup(lambda: os.path.exists(
+            keep_path) and os.remove(keep_path))
+        self.write_file(keep_path, text='[".google.com"]')
+
+        with mock.patch('bleachbit.GuiCookie.threading.Thread'):
+            pane = CookieManagerPane()
+        pane._finish_populate(['.google.com', 'accounts.google.com'])
+        self.assertEqual([tuple(row) for row in pane.cookie_store],
+                         [(False, 'accounts.google.com'), (True, 'google.com')])
+        pane.destroy()

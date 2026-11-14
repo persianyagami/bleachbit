@@ -1,38 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    BleachBit
-    Copyright (C) 2008-2020 Andrew Ziem
-    https://www.bleachbit.org
+SPDX-License-Identifier: GPL-3.0-or-later
+Copyright (c) 2008-2026 Andrew Ziem.
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-    @app none
-    @url none
-    @os Windows, Linux, BSD
-    @cleanerversion v1.1.0
-    @cleanerdate 2019-04-23
-    @cleanerby Andrew Ziem (2009-10-07 - 2019-04-19) & Tobias B. Besemer (2019-04-23)
-    @tested ok v???, Windows 7
-    @testeddate 2019-03-10
-    @testedby https://github.com/Tobias-B-Besemer
-    @note 
+This work is licensed under the terms of the GNU GPL, version 3 or
+later.  See the COPYING file in the top-level directory.
 
 -->
 <cleaner id="deepscan">
   <label translate="true">Deep scan</label>
   <description>Clean files widely scattered across the disk</description>
+  <option id="angular">
+    <label translate="false">.angular</label>
+    <description>Delete the files</description>
+    <warning>This option is slow.</warning>
+    <action command="delete" search="deep" wholeregex="[/\\]\.angular[/\\]"/>
+  </option>
   <option id="backup">
     <label>Backup files</label>
     <description>Delete the backup files</description>
@@ -46,6 +30,24 @@
     <warning>This option is slow.</warning>
     <action command="delete" search="deep" regex="^\.DS_Store$"/>
   </option>
+  <option id="node_modules">
+    <label translate="false">node_modules</label>
+    <description>Delete the files</description>
+    <warning>This option is slow. Inspect the preview for files you want to keep, like those bundled with applications.</warning>
+    <action command="delete" search="deep" wholeregex="[/\\]node_modules[/\\]" nwholeregex="[\\/]AppData[\\/]|[\\/]home[\\/][^\\/]+[\\/]\.[^\\/]+[\\/]|[\\/]Users[\\/][^\\/]+[\\/]\.[^\\/]+[\\/]|[\\/]root[\\/]\.[^\\/]+[\\/]"/>
+  </option>
+  <option id="venv">
+    <label translate="false">venv</label>
+    <description>Delete the files</description>
+    <warning>This option is slow.</warning>
+    <action command="delete" search="deep" wholeregex="[/\\]\.?venv[/\\]" nwholeregex="[\\/]AppData[\\/]|[\\/]home[\\/][^\\/]+[\\/]\.[^\\/]+[\\/]|[\\/]Users[\\/][^\\/]+[\\/]\.[^\\/]+[\\/]|[\\/]root[\\/]\.[^\\/]+[\\/]|[\\/]pipx[\\/]venvs[\\/]|[\\/]Lib[\\/]venv[\\/]|[\\/]lib(64)?[\\/](python|pypy)[0-9.]+t?[\\/]venv[\\/]"/>
+  </option>
+  <option id="pycache">
+    <label translate="false">__pycache__</label>
+    <description>Delete the files</description>
+    <warning>This option is slow.</warning>
+    <action command="delete" search="deep" wholeregex="[/\\]__pycache__"/>
+  </option>
   <option id="thumbs_db">
     <label translate="false">Thumbs.db</label>
     <description>Delete the files</description>
@@ -57,9 +59,9 @@
     <label>Temporary files</label>
     <description>Delete the temporary files</description>
     <warning>This option is slow.</warning>
-    <!-- http://support.microsoft.com/kb/211632 -->
+    <!-- https://web.archive.org/web/20210503033432/https://support.microsoft.com/en-us/topic/description-of-how-word-creates-temporary-files-66b112fb-d2c0-8f40-a0be-70a367cc4c85 -->
     <action command="delete" search="deep" regex="^~wr[a-z][0-9]{4}\.tmp$"/>
-    <!-- http://support.microsoft.com/kb/826810 -->
+    <!-- https://web.archive.org/web/20150228161650/http://support.microsoft.com/kb/826810 -->
     <action command="delete" search="deep" regex="^ppt[0-9]{4}\.tmp$"/>
   </option>
   <option id="vim_swap_user">
@@ -67,26 +69,14 @@
     <description>Delete the backup files</description>
     <warning>This option is slow.</warning>
     <!--
-Here is an example. When editing foo.txt, VIM makes a file called .foo.txt.swp
-that starts with a period.
-
-If the .swp file exists, it will cycle through the alphabet according to
-this post
+When editing foo.txt, VIM makes .foo.txt.swp. If that exists, it cycles back
+through the alphabet (.swo, .swn, ...), but more than three is unlikely.
 https://groups.google.com/forum/#!msg/vim_use/JBHSs3kPPJU/X9WeMsZcfWAJ
-
-The likeliness of VIM not being able to create a swap on the first three
-times is small.
 
 Be careful not to match files such as ~/.htpasswd
 https://github.com/bleachbit/bleachbit/issues/683
 
 -->
-    <action command="delete" search="deep" regex="^.*\.sw[nop]$"/>
-  </option>
-  <option id="vim_swap_root">
-    <label>VIM swap files across system</label>
-    <description>Delete the backup files</description>
-    <warning>This option is slow.</warning>
-    <action command="delete" search="deep" regex="^.*\.sw[nop]$" path="/" os="linux"/>
+    <action command="delete" search="deep" regex="^.*\.sw[nop]$" skip_open="true"/>
   </option>
 </cleaner>

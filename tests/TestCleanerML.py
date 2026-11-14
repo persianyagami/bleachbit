@@ -1,29 +1,34 @@
-# vim: ts=4:sw=4:expandtab
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 """
 Test cases for module CleanerML
 """
 
+# standard imports
+import os
+import shutil
+import sys
+from unittest import mock
+
+# first party imports
+import bleachbit
 from tests import common
-from bleachbit.CleanerML import *
+from bleachbit import Cleaner
+from bleachbit.CleanerML import (
+    CleanerML,
+    boolstr_to_bool,
+    create_pot,
+    default_vars,
+    list_cleanerml_files,
+    load_cleaners,
+    pot_fragment)
+from bleachbit.General import os_match as general_os_match
+from bleachbit.Options import options
+from bleachbit.Process import ProcessInfo, process_cache
 
 
 class CleanerMLTestCase(common.BleachbitTestCase):
@@ -36,20 +41,35 @@ class CleanerMLTestCase(common.BleachbitTestCase):
                 for result in cmd.execute(really_delete):
                     common.validate_result(self, result, really_delete)
 
-    def test_CleanerML(self):
-        """Unit test for class CleanerML"""
-
+    def _get_xmlcleaner(self):
+        """Helper for CleanerML*()"""
         xmlcleaner = CleanerML("doc/example_cleaner.xml")
-
         self.assertIsInstance(xmlcleaner, CleanerML)
         self.assertIsInstance(xmlcleaner.cleaner, Cleaner.Cleaner)
+        return xmlcleaner
 
+    def test_CleanerML(self):
+        """Unit test for class CleanerML"""
+        xmlcleaner = self._get_xmlcleaner()
         # preview
         self.run_all(xmlcleaner, False)
 
-        # really delete if user allows
-        if common.destructive_tests('example_cleaner.xml'):
-            self.run_all(xmlcleaner, True)
+    @common.skipUnlessDestructive
+    def test_CleanerML_destructive(self):
+        """Unit test the destructive parts of class CleanerML"""
+        xmlcleaner = self._get_xmlcleaner()
+        # really delete
+        self.run_all(xmlcleaner, True)
+
+    def test_android_studio_macos_vars(self):
+        """On macOS, the macos and unix values must not repeat a path"""
+        with mock.patch(
+                'bleachbit.CleanerML.general_os_match',
+                lambda os_str, _platform: general_os_match(os_str, 'darwin')):
+            xmlc = CleanerML('cleaners/android_studio.xml')
+        for var_name in ('gradle_home', 'android_home', 'as_cache', 'as_logs'):
+            values = xmlc.vars.get(var_name, [])
+            self.assertEqual(len(values), len(set(values)), var_name)
 
     def test_boolstr_to_bool(self):
         """Unit test for boolstr_to_bool()"""
@@ -61,6 +81,37 @@ class CleanerMLTestCase(common.BleachbitTestCase):
             self.assertEqual(boolstr_to_bool(arg.lower()), output)
             self.assertEqual(boolstr_to_bool(arg.upper()), output)
 
+    def test_claude_session_keeps_memory(self):
+        """Claude > Session keeps the per-project auto-memory"""
+        project = os.path.join(self.tempdir, '.claude',
+                               'projects', '-tmp-proj')
+        transcript = os.path.join(project, 'abc.jsonl')
+        memory = os.path.join(project, 'memory', 'MEMORY.md')
+        common.touch_file(transcript)
+        common.touch_file(memory)
+        env = {'HOME': self.tempdir, 'USERPROFILE': self.tempdir}
+        with mock.patch.dict(os.environ, env):
+            cleaner = CleanerML('cleaners/claude.xml').get_cleaner()
+        paths = [path for option_id, action in cleaner.actions
+                 if option_id == 'session' for path in action.get_paths()]
+        self.assertIn(transcript, paths)
+        self.assertNotIn(memory, paths)
+        self.assertNotIn(os.path.dirname(memory), paths)
+
+    def test_claude_memory(self):
+        """Claude > Auto memory deletes only the per-project auto-memory"""
+        home = self.mkdtemp(prefix='bleachbit-claude-memory')
+        project = os.path.join(home, '.claude', 'projects', '-tmp-proj')
+        common.touch_file(os.path.join(project, 'abc.jsonl'))
+        memory = os.path.join(project, 'memory', 'MEMORY.md')
+        common.touch_file(memory)
+        env = {'HOME': home, 'USERPROFILE': home}
+        with mock.patch.dict(os.environ, env):
+            cleaner = CleanerML('cleaners/claude.xml').get_cleaner()
+        paths = [path for option_id, action in cleaner.actions
+                 if option_id == 'memory' for path in action.get_paths()]
+        self.assertEqual([memory, os.path.dirname(memory)], paths)
+
     def test_create_pot(self):
         """Unit test for create_pot()"""
         os.chdir('po')
@@ -69,10 +120,70 @@ class CleanerMLTestCase(common.BleachbitTestCase):
         finally:
             os.chdir('..')
 
+    def test_default_vars_windows_system(self):
+        """Unit test WindowsSystem in default_vars()"""
+        env = {
+            'WinDir': r'C:\Windows',
+            'ProgramFiles': r'C:\Program Files (x86)',
+            'ProgramW6432': r'C:\Program Files',
+        }
+        with mock.patch('bleachbit.CleanerML.IS_WINDOWS', True), \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('bleachbit.Windows.ARCH_BITS', 32):
+            variables = default_vars()
+        self.assertEqual(
+            [r'C:\Windows\Sysnative', r'C:\Windows\SysWOW64'],
+            variables['WindowsSystem'])
+
+    @common.skipUnlessLinux
+    def test_dnf_running(self):
+        """The DNF and yum cleaners notice a running dnf or yum"""
+        for path in ('cleaners/dnf.xml', 'cleaners/yum.xml'):
+            cleaner = CleanerML(path).get_cleaner()
+            for name in ('dnf', 'dnf4', 'dnf5', 'yum'):
+                procs = (ProcessInfo(1234, name, False),)
+                with mock.patch('bleachbit.Process.process_cache.get', return_value=procs):
+                    self.assertTrue(cleaner.is_process_running(), (path, name))
+
+    @common.skipUnlessLinux
+    def test_geary_paths_listed_once(self):
+        """Geary lists each path once under the default XDG directories"""
+        env = {'HOME': self.tempdir,
+               'XDG_CACHE_HOME': os.path.join(self.tempdir, '.cache'),
+               'XDG_DATA_HOME': os.path.join(self.tempdir, '.local', 'share')}
+        common.touch_file(os.path.join(
+            env['XDG_CACHE_HOME'], 'geary', 'a.bin'))
+        common.touch_file(os.path.join(
+            env['XDG_DATA_HOME'], 'geary', 'acct', 'attachments', 'x.bin'))
+        with mock.patch.dict(os.environ, env):
+            cleaner = CleanerML('cleaners/geary.xml').get_cleaner()
+        for option_id in ('cache', 'attachments'):
+            with self.subTest(option_id=option_id):
+                paths = [path for oid, action in cleaner.actions
+                         if oid == option_id for path in action.get_paths()]
+                self.assertTrue(paths)
+                self.assertEqual(len(paths), len(set(paths)))
+
     def test_list_cleanerml_files(self):
         """Unit test for list_cleanerml_files()"""
         for pathname in list_cleanerml_files():
             self.assertExists(pathname)
+
+    @common.skipIfWindows
+    def test_list_cleanerml_files_vanished(self):
+        """list_cleanerml_files() skips a cleaner deleted after listdir()
+
+        The world-writable check is POSIX only, so this race does not exist
+        on Windows.
+        """
+        dirname = self.mkdtemp(prefix='bleachbit-cleanerml-vanished')
+        real_fn = os.path.join(dirname, 'real.xml')
+        self.write_file(real_fn, contents=b'<cleaner id="test"/>')
+        os.chmod(real_fn, 0o600)
+        ghost_fn = os.path.join(dirname, 'ghost.xml')
+        with mock.patch('bleachbit.CleanerML.listdir',
+                        return_value=iter([ghost_fn, real_fn])):
+            self.assertEqual(list(list_cleanerml_files()), [real_fn])
 
     def test_load_cleaners(self):
         """Unit test for load_cleaners()"""
@@ -86,9 +197,244 @@ class CleanerMLTestCase(common.BleachbitTestCase):
         self.write_file(os.path.join(bleachbit.personal_cleaners_dir, 'invalid.xml'),
                         contents=b'<xml><broken>')
         list(load_cleaners())
-        import shutil
         shutil.rmtree(bleachbit.personal_cleaners_dir)
         bleachbit.personal_cleaners_dir = pcd
+
+    def test_load_cleaners_yields_by_time(self):
+        """load_cleaners() yields on a deadline, not once per file"""
+        with mock.patch.object(bleachbit.CleanerML, '_YIELD_SECONDS', 3600):
+            self.assertEqual(list(load_cleaners()), [])
+        with mock.patch.object(bleachbit.CleanerML, '_YIELD_SECONDS', 0):
+            self.assertEqual(len(list(load_cleaners())),
+                             len(list(list_cleanerml_files())))
+
+    def test_load_cleaners_same_id(self):
+        """A personal cleaner does not replace a bundled one with the same id
+
+        Swap the directory names so the result cannot come from sorting paths.
+        """
+        xml_str = ('<cleaner id="test_same_id"><label>{label}</label>'
+                   '<option id="o"><label>O</label><description>D</description>'
+                   '<action command="delete" search="file" path="{base}/nonexistent"/>'
+                   '</option></cleaner>')
+        self.addCleanup(Cleaner.backends.pop, 'test_same_id', None)
+        for personal_name, system_name in (('a', 'b'), ('b', 'a')):
+            with self.subTest(personal=personal_name, system=system_name):
+                base = self.mkdtemp(prefix='bleachbit-cleanerml-same-id')
+                dirs = {'personal': os.path.join(base, personal_name),
+                        'system': os.path.join(base, system_name)}
+                for label, dirname in dirs.items():
+                    os.mkdir(dirname, 0o700)
+                    fn = os.path.join(dirname, 'same_id.xml')
+                    self.write_file(fn, text=xml_str.format(
+                        label=label, base=base))
+                    os.chmod(fn, 0o600)
+                with mock.patch.multiple(bleachbit,
+                                         personal_cleaners_dir=dirs['personal'],
+                                         system_cleaners_dir=dirs['system'],
+                                         local_cleaners_dir=None), \
+                        self.assertLogs('bleachbit.CleanerML', level='WARNING'):
+                    list(load_cleaners())
+                self.assertEqual(
+                    'system', Cleaner.backends['test_same_id'].name)
+
+    def test_load_cleaners_invalid_utf8(self):
+        """Unit test for load_cleaners() with invalid UTF-8 encoding"""
+        pcd = bleachbit.personal_cleaners_dir
+        bleachbit.personal_cleaners_dir = self.mkdtemp(
+            prefix='bleachbit-cleanerml-utf8')
+        self.write_file(os.path.join(bleachbit.personal_cleaners_dir, 'broken_encoding.xml'),
+                        contents=b'<cleaner id="poison">\n\xff\xfe\xfd Broken\n')
+        list(load_cleaners())
+        shutil.rmtree(bleachbit.personal_cleaners_dir)
+        bleachbit.personal_cleaners_dir = pcd
+
+    @common.skipUnlessLinux
+    def test_load_cleaners_twice_localizations(self):
+        """Reloading cleaners does not add the localization rules again"""
+        from bleachbit import Unix
+        tempdir = self.mkdtemp(prefix='bleachbit-cleanerml-loc')
+        os.makedirs(os.path.join(tempdir, 'share', 'locale', 'fr'))
+        cleaners_dir = os.path.join(tempdir, 'cleaners')
+        os.mkdir(cleaners_dir)
+        self.write_file(os.path.join(cleaners_dir, 'loc.xml'), text=(
+            '<cleaner id="loctest" os="linux"><label>x</label><localizations>'
+            f'<path location="{tempdir}/share"><path location="locale" filter="*"/></path>'
+            '</localizations></cleaner>'))
+        with mock.patch.object(bleachbit, 'personal_cleaners_dir', cleaners_dir), \
+                mock.patch.object(bleachbit, 'local_cleaners_dir', None), \
+                mock.patch.object(bleachbit, 'system_cleaners_dir', None), \
+                mock.patch.object(Unix, 'locales', Unix.Locales()), \
+                mock.patch.dict(Cleaner.backends):
+            list(load_cleaners())
+            list(load_cleaners())
+            # pylint: disable-next=protected-access
+            self.assertEqual(len(Unix.locales._paths.children), 1)
+            paths = list(Unix.locales.localization_paths(['en']))
+        self.assertEqual(
+            paths, [os.path.join(tempdir, 'share', 'locale', 'fr')])
+
+    def test_untrusted_process_action(self):
+        """A process action is ignored for an untrusted cleaner"""
+        xml_str = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<cleaner id="test_untrusted">\n'
+            '  <label>Test</label>\n'
+            '  <description>Test</description>\n'
+            '  <option id="opt">\n'
+            '    <label>Opt</label>\n'
+            '    <description>Opt</description>\n'
+            '    <action command="delete" search="file" path="test-does-not-exist"/>\n'
+            '    <action command="process" cmd="calc.exe"/>\n'
+            '    <action command="process.terminate" name="calc.exe"/>\n'
+            '  </option>\n'
+            '</cleaner>\n')
+        fn = os.path.join(self.mkdtemp(prefix='bleachbit-cleanerml-trust'),
+                          'planted.xml')
+        self.write_file(fn, text=xml_str)
+
+        def action_classes(cleaner):
+            return [a.__class__.__name__ for (_option_id, a) in cleaner.actions]
+
+        trusted = action_classes(CleanerML(fn, trusted=True).cleaner)
+        self.assertIn('Process', trusted)
+        self.assertIn('ProcessTerminate', trusted)
+
+        # The delete action stays; only the process actions are dropped
+        untrusted = action_classes(CleanerML(fn, trusted=False).cleaner)
+        self.assertNotIn('Process', untrusted)
+        self.assertNotIn('ProcessTerminate', untrusted)
+        self.assertIn('Delete', untrusted)
+
+    def test_untrusted_winreg_action_allowed(self):
+        """A winreg action is kept even for an untrusted cleaner"""
+        xml_str = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<cleaner id="test_untrusted_winreg">\n'
+            '  <label>Test</label>\n'
+            '  <description>Test</description>\n'
+            '  <option id="opt">\n'
+            '    <label>Opt</label>\n'
+            '    <description>Opt</description>\n'
+            '    <action command="delete" search="file" path="test-does-not-exist"/>\n'
+            '    <action command="winreg" path="HKCU\\Software\\BleachBitTest"/>\n'
+            '  </option>\n'
+            '</cleaner>\n')
+        fn = os.path.join(self.mkdtemp(prefix='bleachbit-cleanerml-trust'),
+                          'planted_winreg.xml')
+        self.write_file(fn, text=xml_str)
+
+        def action_classes(cleaner):
+            return [a.__class__.__name__ for (_option_id, a) in cleaner.actions]
+
+        for trusted in (True, False):
+            actions = action_classes(CleanerML(fn, trusted=trusted).cleaner)
+            self.assertIn('Winreg', actions)
+            self.assertIn('Delete', actions)
+
+    def test_untrusted_actions_warn_once_per_file(self):
+        """Ignored actions are summarized in one warning, not one per action"""
+        actions = '\n'.join(
+            f'    <action command="process" cmd="calc{i}.exe"/>'
+            for i in range(10))
+        xml_str = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<cleaner id="test_untrusted_many">\n'
+            '  <label>Test</label>\n'
+            '  <description>Test</description>\n'
+            '  <option id="opt">\n'
+            '    <label>Opt</label>\n'
+            '    <description>Opt</description>\n'
+            f'{actions}\n'
+            '  </option>\n'
+            '</cleaner>\n')
+        fn = os.path.join(self.mkdtemp(prefix='bleachbit-cleanerml-trust-log'),
+                          'planted_many.xml')
+        self.write_file(fn, text=xml_str)
+
+        with self.assertLogs('bleachbit.CleanerML', level='WARNING') as cm:
+            CleanerML(fn, trusted=False)
+        self.assertEqual(len(cm.output), 1)
+        self.assertIn("'process'", cm.output[0])
+
+    def test_is_trusted_cleaner(self):
+        """Files shipped next to the application are trusted"""
+        from bleachbit.CleanerML import is_trusted_cleaner
+        system_dir = bleachbit.system_cleaners_dir
+        self.assertTrue(is_trusted_cleaner(
+            os.path.join(system_dir, 'example.xml')))
+        self.assertFalse(is_trusted_cleaner(
+            os.path.join(bleachbit.personal_cleaners_dir, 'example.xml')))
+
+    def test_is_trusted_cleaner_portable(self):
+        """In portable mode the personal cleaners dir is the local one"""
+        from bleachbit.CleanerML import is_trusted_cleaner
+        app_dir = self.mkdtemp(prefix='bleachbit-portable')
+        cleaners_dir = os.path.join(app_dir, 'cleaners')
+        with mock.patch.multiple(
+                'bleachbit',
+                local_cleaners_dir=cleaners_dir,
+                personal_cleaners_dir=cleaners_dir,
+                system_cleaners_dir=os.path.join(app_dir, 'share', 'cleaners')):
+            self.assertTrue(is_trusted_cleaner(
+                os.path.join(cleaners_dir, 'winapp2.ini')))
+            self.assertFalse(is_trusted_cleaner(
+                os.path.join(app_dir, 'elsewhere', 'winapp2.ini')))
+
+    def test_rejects_dtd(self):
+        """A CleanerML file with a DTD is rejected (entity-expansion defense)"""
+        xml_str = (
+            '<?xml version="1.0"?>\n'
+            '<!DOCTYPE cleaner [ <!ENTITY x "y"> ]>\n'
+            '<cleaner id="dtd_test">\n'
+            '  <label>Test</label>\n'
+            '  <description>Test</description>\n'
+            '</cleaner>\n')
+        fn = os.path.join(self.mkdtemp(prefix='bleachbit-cleanerml-dtd'),
+                          'dtd.xml')
+        self.write_file(fn, text=xml_str)
+        xmlcleaner = CleanerML(fn)
+        self.assertFalse(xmlcleaner.cleaner.is_usable())
+
+    def test_nvalid_utf8(self):
+        """Test CleanerML() with invalid UTF-8 encoding
+
+        It should fail gracefully.
+        """
+        fn = os.path.join(self.mkdtemp(prefix='bleachbit-cleanerml-utf8'),
+                          'broken.xml')
+        self.write_file(fn, contents=b'<cleaner id="poison">\n\xff\xfe\xfd\n')
+        xmlcleaner = CleanerML(fn)
+        self.assertIsInstance(xmlcleaner, CleanerML)
+        self.assertFalse(xmlcleaner.cleaner.is_usable())
+
+    def test_utf8_non_ascii(self):
+        """Test CleanerML() with UTF-8 non-ASCII text
+
+        It should load successfully.
+        """
+        xml_str = """<?xml version="1.0" encoding="UTF-8"?>
+<cleaner id="test_utf8">
+    <label>Test</label>
+    <!-- 中文注释 -->
+    <option id="opt">
+        <label>测试标签</label>
+        <description>测试描述</description>
+        <action search="file" command="delete" path="C:\\中文路径\\file.txt"/>
+    </option>
+</cleaner>
+"""
+        fn = os.path.join(self.mkdtemp(prefix='bleachbit-cleanerml-utf8'),
+                          'utf8.xml')
+        self.write_file(fn, contents=xml_str.encode('utf-8'))
+        xmlcleaner = CleanerML(fn)
+        self.assertIsInstance(xmlcleaner, CleanerML)
+        self.assertTrue(xmlcleaner.cleaner.is_usable())
+        self.assertEqual('测试标签', xmlcleaner.cleaner.options['opt'][0])
+        self.assertEqual('测试描述',
+                         xmlcleaner.cleaner.options['opt'][1])
+        commands = list(xmlcleaner.cleaner.get_commands('opt'))
+        self.assertEqual(0, len(commands))
 
     def test_os_match(self):
         """Unit test for os_match"""
@@ -98,18 +444,214 @@ class CleanerMLTestCase(common.BleachbitTestCase):
         self.assertTrue(xmlcleaner.os_match(""))
 
         # as Linux
-        self.assertFalse(xmlcleaner.os_match('windows', 'linux2'))
-        self.assertTrue(xmlcleaner.os_match('linux', 'linux2'))
-        self.assertTrue(xmlcleaner.os_match('unix', 'linux2'))
+        self.assertFalse(xmlcleaner.os_match('windows', 'linux'))
+        self.assertTrue(xmlcleaner.os_match('linux', 'linux'))
+        self.assertTrue(xmlcleaner.os_match('unix', 'linux'))
 
         # as Windows
         self.assertFalse(xmlcleaner.os_match('linux', 'win32'))
         self.assertFalse(xmlcleaner.os_match('unix', 'win32'))
         self.assertTrue(xmlcleaner.os_match('windows', 'win32'))
 
+        # as macOS (canonical name)
+        self.assertTrue(xmlcleaner.os_match('macos', 'darwin'))
+        self.assertTrue(xmlcleaner.os_match('bsd', 'darwin'))
+        self.assertTrue(xmlcleaner.os_match('unix', 'darwin'))
+        self.assertFalse(xmlcleaner.os_match('linux', 'darwin'))
+        self.assertFalse(xmlcleaner.os_match('windows', 'darwin'))
+
+        # as FreeBSD
+        self.assertTrue(xmlcleaner.os_match('unix', 'freebsd'))
+        self.assertTrue(xmlcleaner.os_match('bsd', 'freebsd'))
+        self.assertTrue(xmlcleaner.os_match('freebsd', 'freebsd'))
+        self.assertFalse(xmlcleaner.os_match('linux', 'freebsd'))
+        self.assertFalse(xmlcleaner.os_match('windows', 'freebsd'))
+
+        # "darwin" is accepted as a deprecated alias for "macos"
+        with self.assertLogs('bleachbit.General', level='WARNING'):
+            self.assertTrue(xmlcleaner.os_match('darwin', 'darwin'))
+
+        # comma-separated list with negation (positive tokens OR'd, negative tokens excluded)
+        cases = [
+            ('unix,!macos', 'linux', True),
+            ('unix,!macos', 'freebsd', True),
+            ('unix,!macos', 'darwin', False),
+            ('unix,!macos', 'win32', False),
+            ('!macos', 'win32', True),
+            ('linux , unix', 'linux', True),
+            ('!macos', 'darwin', False),
+            ('linux,freebsd', 'linux', True),
+            ('linux,freebsd', 'freebsd', True),
+            ('linux,freebsd', 'darwin', False),
+            ('linux,freebsd', 'win32', False),
+            ('!macos,!windows', 'linux', True),
+            ('!macos,!windows', 'darwin', False),
+            ('!macos,!windows', 'win32', False),
+        ]
+        for os_attr, platform, expected in cases:
+            with self.subTest(os=os_attr, platform=platform):
+                self.assertEqual(expected,
+                                 xmlcleaner.os_match(os_attr, platform))
+
+        # unrecognized tokens log a warning and fail closed: a positive
+        # token is a non-match and a negated token disqualifies
+        unknown_cases = [
+            ('posix', 'linux', False),
+            ('posix', 'win32', False),
+            ('!posix', 'win32', False),
+            ('!hal9000', 'linux', False),
+            ('linux,hal9000', 'linux', True),
+            ('windows,!hal9000', 'win32', False),
+        ]
+        for os_attr, platform, expected in unknown_cases:
+            with self.subTest(os=os_attr, platform=platform):
+                with self.assertLogs('bleachbit.General', level='WARNING'):
+                    self.assertEqual(expected,
+                                     xmlcleaner.os_match(os_attr, platform))
+
         # as unknown operating system
-        with self.assertRaises(RuntimeError):
+        with self.assertRaisesRegex(RuntimeError, 'Unknown operating system: hal9000'):
             xmlcleaner.os_match('linux', 'hal9000')
+        with self.assertRaisesRegex(RuntimeError, 'Unknown operating system: hal9000'):
+            xmlcleaner.os_match('!macos', 'hal9000')
+
+    def test_option_os_filter(self):
+        """Unit test for <option os="..."> filtering
+
+        An option with an os attribute that does not match the current
+        platform should not be registered on the cleaner.
+        """
+        xml_str = f"""<?xml version="1.0" encoding="UTF-8"?>
+<cleaner id="test_option_os">
+    <label>Test</label>
+    <option id="always">
+        <label>Always</label>
+        <description>Delete the files</description>
+        <action search="file" command="delete" path="{self.tempdir}/always.log"/>
+    </option>
+    <option id="windows_only" os="windows">
+        <label>Windows only</label>
+        <description>Delete the files</description>
+        <action search="file" command="delete" path="{self.tempdir}/windows.log"/>
+    </option>
+    <option id="linux_only" os="linux">
+        <label>Linux only</label>
+        <description>Delete the files</description>
+        <action search="file" command="delete" path="{self.tempdir}/linux.log"/>
+    </option>
+    <option id="mac_only" os="macos">
+        <label>macOS only</label>
+        <description>Delete the files</description>
+        <action search="file" command="delete" path="{self.tempdir}/mac.log"/>
+    </option>
+</cleaner>
+"""
+        cml_path = os.path.join(self.tempdir, 'test_option_os.xml')
+        self.write_file(cml_path, xml_str.encode(sys.getdefaultencoding()))
+
+        xmlc = CleanerML(cml_path)
+        # The unfiltered option is always present.
+        self.assertIn('always', xmlc.cleaner.options)
+        # The remaining options are conditionally available.
+        if bleachbit.IS_LINUX:
+            self.assertNotIn('mac_only', xmlc.cleaner.options)
+            self.assertNotIn('windows_only', xmlc.cleaner.options)
+            self.assertIn('linux_only', xmlc.cleaner.options)
+        elif bleachbit.IS_WINDOWS:
+            self.assertIn('windows_only', xmlc.cleaner.options)
+            self.assertNotIn('linux_only', xmlc.cleaner.options)
+            self.assertNotIn('mac_only', xmlc.cleaner.options)
+        elif bleachbit.IS_MAC:
+            self.assertNotIn('windows_only', xmlc.cleaner.options)
+            self.assertNotIn('linux_only', xmlc.cleaner.options)
+            self.assertIn('mac_only', xmlc.cleaner.options)
+
+    def _load_real_cleaner_as(self, filename, platform):
+        """Load a cleaner from the cleaners directory as if on another platform
+
+        CleanerML.os_match() calls General.os_match() with the real
+        platform, so the call is replaced to use the given platform.
+        """
+        def os_match_for_platform(os_str, _platform=None):
+            return general_os_match(os_str, platform)
+
+        with mock.patch('bleachbit.CleanerML.general_os_match',
+                        os_match_for_platform):
+            return CleanerML(os.path.join('cleaners', filename)).cleaner
+
+    def test_teamviewer_options_by_platform(self):
+        """The TeamViewer cleaner has the options of each platform
+
+        macOS has the cache, the cookies and the site data. Windows keeps
+        the logs and the most recently used list. Linux does not load the
+        cleaner.
+        """
+        mac = self._load_real_cleaner_as('teamviewer.xml', 'darwin')
+        self.assertEqual(sorted(mac.options), [
+                         'cache', 'cookies', 'site_data'])
+        # The framework adds an action of its own for the localizations.
+        self.assertEqual(
+            sum(1 for option_id, __action in mac.actions
+                if option_id == 'cache'), 3)
+        windows = self._load_real_cleaner_as('teamviewer.xml', 'win32')
+        self.assertEqual(sorted(windows.options), ['logs', 'mru'])
+        linux = self._load_real_cleaner_as('teamviewer.xml', 'linux')
+        self.assertEqual(sorted(linux.options), [])
+        self.assertEqual(linux.actions, [])
+
+    def test_waterfox_options_by_platform(self):
+        """The Waterfox cleaner has the macOS cache only on macOS"""
+        mac_cache = os.path.normpath(
+            os.path.expanduser('~/Library/Caches/Waterfox/Profiles/*/'))
+
+        def cache_paths(platform):
+            cleaner = self._load_real_cleaner_as('waterfox.xml', platform)
+            return [os.path.normpath(path)
+                    for option_id, action in cleaner.actions
+                    if option_id == 'cache'
+                    for path in action.paths]
+
+        self.assertIn(mac_cache, cache_paths('darwin'))
+        self.assertNotIn(mac_cache, cache_paths('win32'))
+        self.assertNotIn(mac_cache, cache_paths('linux'))
+
+    @common.skipIfWindows
+    def test_waterfox_macos_profile_var(self):
+        """On macOS the profile variable finds the Waterfox profile"""
+        home = os.path.join(self.tempdir, 'waterfox-home')
+        profile = os.path.join(
+            home, 'Library', 'Application Support', 'Waterfox', 'Profiles',
+            'abcd1234.default-release')
+        os.makedirs(profile)
+        with mock.patch.dict(os.environ, {'HOME': home}):
+            cleaner = self._load_real_cleaner_as('waterfox.xml', 'darwin')
+        paths = [os.path.normpath(path)
+                 for option_id, action in cleaner.actions
+                 if option_id == 'cookies'
+                 for path in action.paths]
+        self.assertIn(os.path.join(profile, 'cookies.sqlite'), paths)
+
+    @common.skipUnlessLinux
+    def test_running_process_names(self):
+        """Cleaners notice their application by its Linux process name"""
+        cases = (
+            ('android_studio', 'studio'),
+            ('apt', 'apt'),
+            ('apt', 'aptitude'),
+            ('rhythmbox', 'rhythmbox'),
+            ('slack', 'slack'),
+            ('transmission', 'transmission-daemon'),
+            ('transmission', 'transmission-gtk'),
+            ('transmission', 'transmission-qt'),
+        )
+        self.addCleanup(process_cache.invalidate)
+        for cleaner_id, exe_name in cases:
+            with self.subTest(cleaner_id=cleaner_id, exe_name=exe_name):
+                cleaner = CleanerML(f'cleaners/{cleaner_id}.xml').get_cleaner()
+                process_cache.invalidate()
+                with mock.patch('bleachbit.Process.enumerate_processes',
+                                return_value=[ProcessInfo(1234, exe_name, True)]):
+                    self.assertTrue(cleaner.is_process_running())
 
     def test_pot_fragment(self):
         """Unit test for pot_fragment()"""
@@ -161,3 +703,78 @@ class CleanerMLTestCase(common.BleachbitTestCase):
         self.run_all(xmlc, True)
         self.assertNotExists(test_log_path_a)
         self.assertNotExists(test_log_path_b)
+
+    def test_xlate_cb_source_text(self):
+        """The .pot callback gets the source text, not its translation"""
+        xml_str = f"""<cleaner id="xlate">
+    <label translate="true">Label</label>
+    <description>Description</description>
+    <option id="option1">
+        <label>Option label</label>
+        <description>Option description</description>
+        <warning>Option warning</warning>
+        <action search="file" command="delete" path="{self.tempdir}/nonexistent"/>
+    </option>
+</cleaner>
+"""
+        cml_path = os.path.join(self.tempdir, 'xlate.xml')
+        self.write_file(cml_path, xml_str.encode(sys.getdefaultencoding()))
+        strings = []
+        with mock.patch('bleachbit.CleanerML._', lambda s: 'translated ' + s):
+            xmlc = CleanerML(cml_path,
+                             lambda s, translators=None: strings.append(s))
+        self.assertEqual(['Label', 'Description', 'Option label',
+                          'Option description', 'Option warning'], strings)
+        self.assertEqual('translated Label', xmlc.cleaner.name)
+
+    @common.skipUnlessWindows
+    def test_vuze_program_files(self):
+        """Vuze actions under Program Files stay in the Vuze folder"""
+        roots = (r'C:\Program Files (x86)', r'C:\Program Files')
+        env = {'ProgramFiles': roots[0], 'ProgramW6432': roots[1]}
+        with mock.patch.dict(os.environ, env):
+            cleaner = CleanerML('cleaners/vuze.xml').get_cleaner()
+        vuze_dirs = tuple(root + '\\Vuze\\' for root in roots)
+        checked = 0
+        for _option_id, action in cleaner.actions:
+            for path in getattr(action, 'paths', ()):
+                if path.startswith(roots):
+                    self.assertTrue(path.startswith(vuze_dirs), path)
+                    checked += 1
+        self.assertGreater(checked, 0)
+
+    def test_var_glob(self):
+        """A glob <var> value does not leave '//' in action paths"""
+        basedir = self.mkdtemp(prefix='bleachbit-cleanerml-glob')
+        xml_str = f"""
+<cleaner id="testvarglob">
+    <label>cleaner label</label>
+    <description>cleaner description</description>
+    <var name="profile">
+        <value search="glob">{basedir}/*</value>
+    </var>
+    <option id="option1">
+        <label>option1 label</label>
+        <description>option1 description</description>
+        <action search="file" command="delete" path="$$profile$$/test.log" />
+    </option>
+</cleaner>
+"""
+        cml_path = os.path.join(self.mkdtemp(), 'test_var_glob.xml')
+        self.write_file(cml_path, xml_str.encode(sys.getdefaultencoding()))
+        profile = os.path.join(basedir, 'profile')
+        test_log_path = os.path.join(profile, 'test.log')
+        common.touch_file(test_log_path)
+        # The glob matches directories only
+        common.touch_file(os.path.join(basedir, 'profiles.ini'))
+
+        xmlc = CleanerML(cml_path)
+        self.assertEqual([profile], xmlc.vars['profile'])
+        commands = list(xmlc.cleaner.get_commands('option1'))
+        self.assertEqual([test_log_path], [cmd.path for cmd in commands])
+
+        options.set_whitelist_paths([('file', test_log_path)])
+        for cmd in commands:
+            for result in cmd.execute(False):
+                self.assertEqual(0, result['n_deleted'])
+        self.assertExists(test_log_path)

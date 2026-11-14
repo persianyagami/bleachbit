@@ -1,37 +1,50 @@
-# vim: ts=4:sw=4:expandtab
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 
 """
 Perform the preview or delete operations
 """
 
-from bleachbit import DeepScan, FileUtilities
-from bleachbit.Cleaner import backends
-from bleachbit import _, ungettext
-
+# standard imports
+import errno
 import logging
 import math
-import sys
 import os
+import sys
+import time
+import warnings
+
+# first party imports
+from bleachbit import DeepScan, FileUtilities, IS_WINDOWS
+from bleachbit.Action import FileActionProvider
+from bleachbit.Cleaner import backends
+from bleachbit.Constant import EMPTY_SPACE_WARNING
+from bleachbit.GtkShim import ignore_pygobject_asyncio_warnings
+from bleachbit.Language import get_text as _, nget_text as ngettext
+from bleachbit.FileUtilities import close_delete_parent_lock
+from bleachbit.Process import process_cache
 
 logger = logging.getLogger(__name__)
+
+# Delayed ops run last, sorted ascending: memory, then empty space
+_DELAY_PRIORITY = {'empty_space': 100, 'memory': 99}
+
+
+def format_minutes_remaining(msg2, eta_mins):
+    """Format the localized time-remaining message.
+
+    Some translations (e.g., Arabic and Hebrew) intentionally omit the
+    %d placeholder for certain plural forms, so tolerate a failed
+    formatting and show the message as-is. (Issue #2305)
+    """
+    try:
+        return msg2 % eta_mins
+    except (TypeError, ValueError):
+        return msg2
 
 
 class Worker:
@@ -53,7 +66,7 @@ class Worker:
         """
         self.ui = ui
         self.really_delete = really_delete
-        assert(isinstance(operations, dict))
+        assert isinstance(operations, dict)
         self.operations = operations
         self.size = 0
         self.total_bytes = 0
@@ -62,8 +75,10 @@ class Worker:
         self.total_special = 0  # special operations
         self.yield_time = None
         self.is_aborted = False
-        if 0 == len(self.operations):
+        if not self.operations:
             raise RuntimeError("No work to do")
+        # A folder can have been replaced since the last run
+        FileUtilities.clear_path_spellings()
 
     def abort(self):
         """Stop the preview/cleaning operation"""
@@ -77,6 +92,7 @@ class Worker:
         # replaced by a message such as 'Permission denied.'
         err = _("Exception while running operation '%(operation)s': '%(msg)s'") \
             % {'operation': operation, 'msg': str(sys.exc_info()[1])}
+
         logger.error(err, exc_info=True)
         self.total_errors += 1
 
@@ -85,7 +101,7 @@ class Worker:
         ret = None
         try:
             for ret in cmd.execute(self.really_delete):
-                if True == ret or isinstance(ret, tuple):
+                if ret is True or isinstance(ret, tuple):
                     # Temporarily pass control to the GTK idle loop,
                     # allow user to abort, and
                     # display progress (if applicable).
@@ -93,17 +109,48 @@ class Worker:
                 if self.is_aborted:
                     return
         except SystemExit:
-            pass
+            logger.debug('%s raised SystemExit, which we do not honor', cmd)
         except Exception as e:
-            # 2 = does not exist
-            # 13 = permission denied
-            from errno import ENOENT, EACCES
-            if isinstance(e, OSError) and e.errno in (ENOENT, EACCES):
-                # For access denied, do not show traceback
-                exc_message = str(e)
-                logger.error('%s: %s', exc_message, cmd)
+            if isinstance(e, OSError) and e.errno == errno.ENOENT:
+                # ENOENT (Error NO ENTry) means file not found.
+                # Normalize Windows extended paths (\\?\) before logging
+                # so the user sees the canonical form and tests avoid
+                # double-backslash sequences.
+                filename = e.filename
+                if IS_WINDOWS and filename:
+                    filename = FileUtilities.extended_path_undo(filename)
+                # Do not show traceback.
+                logger.error(_("File not found: %s"), filename)
+            elif isinstance(e, OSError) and e.errno in (
+                    errno.EACCES, errno.ELOOP, errno.ENOTDIR):
+                # EACCES means access denied; ELOOP and ENOTDIR also occur when
+                # O_NOFOLLOW refuses a symlink swapped in for a file or dir.
+                # Do not show traceback.
+                if e.strerror == "Access denied in delete_locked_file()":
+                    # This comes from Windows.delete_locked_file()
+                    logger.error(
+                        _("Access denied when flagging file for later delete: %s"), e.filename)
+                elif e.strerror == "Access denied in delete_registry_value()":
+                    # This comes from Windows.delete_registry_value()
+                    logger.error(
+                        _("Access denied when deleting registry value: %s"), e.filename)
+                elif e.strerror == "Access denied in delete_registry_key()":
+                    # This comes from Windows.delete_registry_key()
+                    logger.error(
+                        _("Access denied when deleting registry key: %s"), e.filename)
+                else:
+                    logger.error(_("Access denied: %s"), e.filename)
+            elif (e.__class__.__module__ == 'sqlite3'
+                  and e.__class__.__name__ == 'OperationalError'
+                  and str(e).startswith('database is locked')):
+                logger.error(_("Database is locked: %s"),
+                             getattr(cmd, 'path', cmd))
             else:
                 # For other errors, show the traceback.
+                # TRANSLATORS: The special keyword {operation_option} will be
+                # replaced by a cleaner and option such as 'firefox.cache'.
+                # The special keyword {command} will be replaced by the
+                # cleaning action that failed. Do not translate the placeholders.
                 msg = _('Error: {operation_option}: {command}')
                 data = {'command': cmd, 'operation_option': operation_option}
                 logger.error(msg.format(**data), exc_info=True)
@@ -118,10 +165,7 @@ class Worker:
             else:
                 size = "?B"
 
-            if ret['path']:
-                path = ret['path']
-            else:
-                path = ''
+            path = ret['path'] or ''
 
             line = "%s %s %s\n" % (ret['label'], size, path)
             self.total_deleted += ret['n_deleted']
@@ -134,48 +178,49 @@ class Worker:
     def clean_operation(self, operation):
         """Perform a single cleaning operation"""
         operation_options = self.operations[operation]
-        assert(isinstance(operation_options, list))
+        assert isinstance(operation_options, list)
         logger.debug("clean_operation('%s'), options = '%s'",
                      operation, operation_options)
 
         if not operation_options:
             return
 
-        if self.really_delete and backends[operation].is_running():
+        if self.really_delete and self.backends[operation].is_process_running():
             # TRANSLATORS: %s expands to a name such as 'Firefox' or 'System'.
             err = _("%s cannot be cleaned because it is currently running.  Close it, and try again.") \
-                % backends[operation].get_name()
+                % self.backends[operation].get_name()
             self.ui.append_text(err + "\n", 'error')
             self.total_errors += 1
             return
-        import time
         self.yield_time = time.time()
 
         total_size = 0
         for option_id in operation_options:
+            if self.is_aborted:
+                break
             self.size = 0
-            assert(isinstance(option_id, str))
+            assert isinstance(option_id, str)
             # normal scan
-            for cmd in backends[operation].get_commands(option_id):
+            for cmd in self.backends[operation].get_commands(option_id):
                 for ret in self.execute(cmd, '%s.%s' % (operation, option_id)):
-                    if True == ret:
+                    if ret is True:
                         # Return control to PyGTK idle loop to keep
                         # it responding allow the user to abort
                         self.yield_time = time.time()
                         yield True
-                if self.is_aborted:
-                    break
                 if time.time() - self.yield_time > 0.25:
                     if self.really_delete:
                         self.ui.update_total_size(self.total_bytes)
                     yield True
                     self.yield_time = time.time()
+                if self.is_aborted:
+                    break
 
             self.ui.update_item_size(operation, option_id, self.size)
             total_size += self.size
 
             # deep scan
-            for (path, search) in backends[operation].get_deep_scan(option_id):
+            for (path, search) in self.backends[operation].get_deep_scan(option_id):
                 if '' == path:
                     path = os.path.expanduser('~')
                 if search.command not in ('delete', 'shred'):
@@ -189,17 +234,30 @@ class Worker:
     def run_delayed_op(self, operation, option_id):
         """Run one delayed operation"""
         self.ui.update_progress_bar(0.0)
-        if 'free_disk_space' == option_id:
-            # TRANSLATORS: 'free' means 'unallocated'
-            msg = _("Please wait.  Wiping free disk space.")
+        if 'empty_space' == option_id:
+            # TRANSLATORS: 'empty' means 'unallocated'
+            msg = _("Please wait. Wiping empty space.")
+            self.ui.append_text(EMPTY_SPACE_WARNING)
+            self.ui.append_text('\n\n')
             self.ui.append_text(
-                _('Wiping free disk space erases remnants of files that were deleted without shredding. It does not free up space.'))
+                # TRANSLATORS: Instruction shown while wiping a drive's empty space.
+                _('To stop this process, press the abort button on the toolbar and wait.'))
+            self.ui.append_text('\n\n')
+            self.ui.append_text(
+                # TRANSLATORS: Warning shown while wiping a drive's
+                # empty space.
+                _('If the application is force closed before the process is complete, '
+                  'large files may remain on the disk, and they may use all available space. '
+                  'To remove them, start BleachBit again.'))
+            self.ui.append_text('\n')
         elif 'memory' == option_id:
             msg = _("Please wait.  Cleaning %s.") % _("Memory")
         else:
             raise RuntimeError("Unexpected option_id in delayed ops")
         self.ui.update_progress_bar(msg)
-        for cmd in backends[operation].get_commands(option_id):
+        for cmd in self.backends[operation].get_commands(option_id):
+            if self.is_aborted:
+                return
             for ret in self.execute(cmd, '%s.%s' % (operation, option_id)):
                 if isinstance(ret, tuple):
                     # Display progress (for free disk space)
@@ -207,21 +265,23 @@ class Worker:
                     # A while ago there were other phase numbers. Currently it's just 1
                     if phase != 1:
                         raise RuntimeError(
-                            'While wiping free space, unexpected phase %d' % phase)
+                            'While wiping empty space, unexpected phase %d' % phase)
                     percent_done = ret[1]
                     eta_seconds = ret[2]
                     self.ui.update_progress_bar(percent_done)
                     if isinstance(eta_seconds, int):
                         eta_mins = math.ceil(eta_seconds / 60)
-                        msg2 = ungettext("About %d minute remaining.",
-                                         "About %d minutes remaining.", eta_mins) \
-                            % eta_mins
+                        # xgettext: no-python-format
+                        # TRANSLATORS: %d is the estimated number of minutes remaining.
+                        msg2 = ngettext("About %d minute remaining.",
+                                        "About %d minutes remaining.", eta_mins)
+                        msg2 = format_minutes_remaining(msg2, eta_mins)
                         self.ui.update_progress_bar(msg + ' ' + msg2)
                     else:
                         self.ui.update_progress_bar(msg)
                 if self.is_aborted:
                     break
-                if True == ret or isinstance(ret, tuple):
+                if ret is True or isinstance(ret, tuple):
                     # Return control to PyGTK idle loop to keep
                     # it responding and allow the user to abort.
                     yield True
@@ -231,50 +291,66 @@ class Worker:
         1. General cleaning
         2. Deep scan
         3. Memory
-        4. Free disk space"""
+        4. Empty space"""
+        # Otherwise a scan from an earlier run still reports an application
+        # the user has just closed.
+        process_cache.invalidate()
+        # A cached walk.files listing goes stale once a run deletes files
+        FileActionProvider.invalidate_cache()
+        # Keep the cleaners in case a refresh clears backends mid-run
+        self.backends = {operation: backends[operation]
+                         for operation in self.operations}
         self.deepscans = {}
         # prioritize
         self.delayed_ops = []
         for operation in self.operations:
-            delayables = ['free_disk_space', 'memory']
-            for delayable in delayables:
-                if operation not in ('system', '_gui'):
-                    continue
+            if operation not in ('system', '_gui'):
+                continue
+            for delayable, priority in _DELAY_PRIORITY.items():
                 if delayable in self.operations[operation]:
-                    i = self.operations[operation].index(delayable)
-                    del self.operations[operation][i]
-                    priority = 99
-                    if 'free_disk_space' == delayable:
-                        priority = 100
-                    new_op = (priority, {operation: [delayable]})
-                    self.delayed_ops.append(new_op)
+                    self.operations[operation].remove(delayable)
+                    self.delayed_ops.append((priority, operation, delayable))
 
-        # standard operations
-        import warnings
-        with warnings.catch_warnings(record=True) as ws:
-            # This warning system allows general warnings. Duplicate will
-            # be removed, and the warnings will show near the end of
-            # the log.
+        try:
+            # standard operations
+            with warnings.catch_warnings(record=True) as ws:
+                # This warning system allows general warnings. Duplicate will
+                # be removed, and the warnings will show near the end of
+                # the log.
 
-            warnings.simplefilter('once')
-            for dummy in self.run_operations(self.operations):
-                # yield to GTK+ idle loop
-                yield True
-            for w in ws:
-                logger.warning(w.message)
-
-        # run deep scan
-        if self.deepscans:
-            for dummy in self.run_deep_scan():
-                yield dummy
-
-        # delayed operations
-        for op in sorted(self.delayed_ops):
-            operation = list(op[1].keys())[0]
-            for option_id in list(op[1].values())[0]:
-                for ret in self.run_delayed_op(operation, option_id):
+                warnings.simplefilter('once')
+                # simplefilter('once') prepends a catch-all filter that would
+                # capture PyGObject's asyncio deprecation warnings and re-log
+                # them as red errors in the GUI.  Re-install the ignore filter
+                # so it takes precedence over the 'once' filter.
+                ignore_pygobject_asyncio_warnings()
+                for _dummy in self.run_operations(self.operations):
                     # yield to GTK+ idle loop
                     yield True
+                for w in ws:
+                    logger.warning(w.message)
+
+            # run deep scan
+            if self.deepscans and not self.is_aborted:
+                yield from self.run_deep_scan()
+
+            # After standard operations and deep scan, close the lock
+            # of the parent directory.
+            close_delete_parent_lock()
+
+            # delayed operations
+            for _priority, operation, option_id in sorted(
+                    self.delayed_ops, key=lambda op: op[0]):
+                if self.is_aborted:
+                    break
+                for _ret in self.run_delayed_op(operation, option_id):
+                    # yield to GTK+ idle loop
+                    yield True
+        finally:
+            # Wiping empty space takes the lock again
+            close_delete_parent_lock()
+            # Nothing replays the listings after the run, so free them
+            FileActionProvider.invalidate_cache()
 
         # print final stats
         bytes_delete = FileUtilities.bytes_to_human(self.total_bytes)
@@ -298,9 +374,15 @@ class Worker:
             line = _("Files to be deleted: %d") % self.total_deleted
         self.ui.append_text("\n%s" % line)
         if self.total_special > 0:
+            # TRANSLATORS: %d is the number of special cleaning operations
+            # completed. Special operations are cleaning actions that do
+            # not delete a file, such as overwriting a file's contents,
+            # truncating a file, or deleting a Windows registry key.
             line = _("Special operations: %d") % self.total_special
             self.ui.append_text("\n%s" % line)
         if self.total_errors > 0:
+            # TRANSLATORS: %d is the count of errors that occurred
+            # during the cleaning or preview operation.
             line = _("Errors: %d") % self.total_errors
             self.ui.append_text("\n%s" % line, 'error')
         self.ui.append_text('\n')
@@ -313,7 +395,7 @@ class Worker:
 
     def run_deep_scan(self):
         """Run deep scans"""
-        logger.debug(' deepscans=%s' % self.deepscans)
+        logger.debug(' deepscans=%s', self.deepscans)
         # TRANSLATORS: The "deep scan" feature searches over broad
         # areas of the file system such as the user's whole home directory
         # or all the system executables.
@@ -322,18 +404,21 @@ class Worker:
         ds = DeepScan.DeepScan(self.deepscans)
 
         for cmd in ds.scan():
-            if True == cmd:
+            if self.is_aborted:
+                break
+            if cmd is True:
                 yield True
                 continue
-            for ret in self.execute(cmd, 'deepscan'):
+            for _ret in self.execute(cmd, 'deepscan'):
                 yield True
 
     def run_operations(self, my_operations):
         """Run a set of operations (general, memory, free disk space)"""
-        count = 0
-        for operation in my_operations:
+        for count, operation in enumerate(my_operations):
+            if self.is_aborted:
+                break
             self.ui.update_progress_bar(1.0 * count / len(my_operations))
-            name = backends[operation].get_name()
+            name = self.backends[operation].get_name()
             if self.really_delete:
                 # TRANSLATORS: %s is replaced with Firefox, System, etc.
                 msg = _("Please wait.  Cleaning %s.") % name
@@ -343,9 +428,11 @@ class Worker:
             self.ui.update_progress_bar(msg)
             yield True  # show the progress bar message now
             try:
-                for dummy in self.clean_operation(operation):
+                for _dummy in self.clean_operation(operation):
                     yield True
-            except:
+            except BrokenPipeError:
+                # Propagate to the top-level handler (e.g., when the
+                # downstream pipe consumer like `less` closes early).
+                raise
+            except Exception:
                 self.print_exception(operation)
-
-            count += 1

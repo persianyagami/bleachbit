@@ -1,36 +1,23 @@
-# vim: ts=4:sw=4:expandtab
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 """
 Check local CleanerML files as a security measure
 """
 
-from bleachbit import _, _p
-import bleachbit
-from bleachbit.CleanerML import list_cleanerml_files
-from bleachbit.Options import options
-
+# standard imports
 import hashlib
 import logging
 import os
 import sys
+
+# first party imports
+from bleachbit.Language import get_text as _, pget_text as _p
+from bleachbit.CleanerML import list_cleanerml_files
+from bleachbit.Options import options
 
 
 logger = logging.getLogger(__name__)
@@ -43,15 +30,15 @@ NEW = 3
 def cleaner_change_dialog(changes, parent):
     """Present a dialog regarding the change of cleaner definitions"""
 
-    def toggled(cell, path, model):
+    def toggled(_cell, path, model):
         """Callback for clicking the checkbox"""
         __iter = model.get_iter_from_string(path)
         value = not model.get_value(__iter, 0)
         model.set(__iter, 0, value)
 
     # TODO: move to GuiBasic
-    from bleachbit.GuiBasic import Gtk
-    from gi.repository import GObject
+    from bleachbit.GtkShim import Gtk, GObject
+    from bleachbit.GuiUtil import load_icon_or_fallback
 
     dialog = Gtk.Dialog(title=_("Security warning"),
                         transient_for=parent,
@@ -60,8 +47,7 @@ def cleaner_change_dialog(changes, parent):
 
     # create warning
     warnbox = Gtk.Box()
-    image = Gtk.Image()
-    image.set_from_icon_name("dialog-warning", Gtk.IconSize.DIALOG)
+    image = load_icon_or_fallback("dialog-warning", Gtk.IconSize.DIALOG)
     warnbox.pack_start(image, False, True, 0)
 
     # TRANSLATORS: Cleaner definitions are XML data files that define
@@ -103,33 +89,40 @@ def cleaner_change_dialog(changes, parent):
 
     # run dialog
     dialog.show_all()
-    while True:
-        if Gtk.ResponseType.ACCEPT != dialog.run():
-            sys.exit(0)
-        delete = []
-        for row in liststore:
-            b = row[0]
-            path = row[1]
-            if b:
-                delete.append(path)
-        if 0 == len(delete):
-            # no files selected to delete
+    # A delete that fails propagates, so the caller skips the local
+    # cleaners; close the dialog either way.
+    try:
+        while True:
+            if Gtk.ResponseType.ACCEPT != dialog.run():
+                sys.exit(0)
+            delete = []
+            for row in liststore:
+                b = row[0]
+                path = row[1]
+                if b:
+                    delete.append(path)
+            if not delete:
+                # no files selected to delete
+                break
+            from . import GuiBasic
+            if not GuiBasic.delete_confirmation_dialog(parent, mention_preview=False):
+                # confirmation not accepted, so do not delete files
+                continue
+            for path in delete:
+                logger.info("deleting unrecognized CleanerML '%s'", path)
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    # Deleted by hand, or listed twice when the personal and
+                    # local cleaner directories are the same (portable)
+                    pass
             break
-        from . import GuiBasic
-        if not GuiBasic.delete_confirmation_dialog(parent, mention_preview=False):
-            # confirmation not accepted, so do not delete files
-            continue
-        for path in delete:
-            logger.info("deleting unrecognized CleanerML '%s'", path)
-            os.remove(path)
-        break
-    dialog.destroy()
+    finally:
+        dialog.destroy()
 
 
 def hashdigest(string):
     """Return hex digest of hash for a string"""
-
-    # hashlib requires Python 2.5
     if isinstance(string, str):
         string = string.encode()
     return hashlib.sha512(string).hexdigest()
@@ -141,21 +134,25 @@ class RecognizeCleanerML:
 
     def __init__(self, parent_window=None):
         self.parent_window = parent_window
-        try:
-            self.salt = options.get('hashsalt')
-        except bleachbit.NoOptionError:
+        self.salt = options.get('hashsalt')
+        if self.salt is None:
             self.salt = hashdigest(os.urandom(512))
             options.set('hashsalt', self.salt)
         self.__scan()
 
     def __recognized(self, pathname):
         """Is pathname recognized?"""
-        with open(pathname) as f:
-            body = f.read()
-        new_hash = hashdigest(self.salt + body)
+        # __init__ should set the salt.
+        if not self.salt:
+            raise RuntimeError('salt is not set')
         try:
-            known_hash = options.get_hashpath(pathname)
-        except bleachbit.NoOptionError:
+            with open(pathname, 'rb') as f:
+                body = f.read()
+        except OSError:  # The file is locked, what to do next?
+            return NEW, hashdigest(b"")
+        new_hash = hashdigest(str.encode(self.salt, encoding='utf-8') + body)
+        known_hash = options.get_hashpath(pathname)
+        if known_hash is None:
             return NEW, new_hash
         if new_hash == known_hash:
             return KNOWN, new_hash
@@ -167,9 +164,9 @@ class RecognizeCleanerML:
         for pathname in sorted(list_cleanerml_files(local_only=True)):
             pathname = os.path.abspath(pathname)
             (status, myhash) = self.__recognized(pathname)
-            if NEW == status or CHANGED == status:
+            if status in (NEW, CHANGED):
                 changes.append([pathname, status, myhash])
-        if len(changes) > 0:
+        if changes:
             cleaner_change_dialog(changes, self.parent_window)
             for change in changes:
                 pathname = change[0]

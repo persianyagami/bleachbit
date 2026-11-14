@@ -1,14 +1,31 @@
 APP = bleachbit
 POFILES = $(wildcard *.po)
 MOFILES = $(patsubst %.po,%.mo,$(POFILES))
-SRC = $(wildcard ../bleachbit/*.py) ../data/app-menu.ui
+PY_SRC = $(wildcard ../bleachbit/*.py)
+UI_SRC = ../share/app-menu.ui
+SRC = $(PY_SRC) $(UI_SRC)
 POTFILE = $(APP).pot
+ITS ?= /usr/share/gettext/its/metainfo.its
+PYTHON ?= python3
+# Quoted form for calling Python. Windows CI passes a backslash path that bash
+# mangles unquoted, so use this instead of $(PYTHON).
+PYTHON_CMD := "$(PYTHON)"
 
 
-.PHONY: refresh-po spelling local install clean all
+.PHONY: refresh-po spelling local install clean all require-gettext tests
+
+require-gettext:
+	@missing=0; \
+	for c in xgettext msgmerge msgfmt msggrep; do \
+		command -v $$c >/dev/null 2>&1 || missing=1; \
+	done; \
+	if [ $$missing -ne 0 ]; then \
+		echo "ERROR: Missing gettext. APT users, try: sudo apt install gettext"; \
+		exit 1; \
+	fi
 
 cleanerml.pot: ../bleachbit/CleanerML.py ../cleaners/*xml
-	python3 ../bleachbit.py --pot
+	$(PYTHON_CMD) ../bleachbit.py --pot
 
 desktop.pot: ../org.bleachbit.BleachBit.desktop
 	echo "#: ../org.bleachbit.BleachBit.desktop" > desktop.pot
@@ -20,24 +37,63 @@ desktop.pot: ../org.bleachbit.BleachBit.desktop
 	echo "msgstr \"\"" >> desktop.pot
 	echo >> desktop.pot
 
+metainfo.pot: ../org.bleachbit.BleachBit.metainfo.xml require-gettext
+	@echo "* Extracting translatable strings from metainfo.xml using xgettext with ITS"
+	@if [ -f "$(ITS)" ]; then \
+		xgettext -o $@ \
+			--from-code=UTF-8 \
+			--add-comments=TRANSLATORS \
+			--add-location=file \
+			--its=$(ITS) \
+			$<; \
+	else \
+		echo "WARNING: Required file '$(ITS)' is missing. Skipping metainfo extraction (creating stub)."; \
+		echo "APT users, try: sudo apt install appstream"; \
+		echo '# metainfo.pot stub (ITS file missing)' > $@; \
+	fi
 
-$(POTFILE): $(SRC) cleanerml.pot desktop.pot
-	@echo "* Generating $(APP).pot"
-	echo " Words before update: " \
-		`tail -n +20 bleachbit.pot | grep -v ^# | sed "s/\(msgstr\|msgid\)//g" | sort | wc --words`
-	cat cleanerml.pot desktop.pot > $(APP).pot
-	xgettext -o $(APP).pot \
+nsis.pot: ../windows/NsisInclude/NsisMultiUserLang.nsh ../windows/nsis_translations.py
+	$(PYTHON_CMD) ../windows/nsis_translations.py --pot
+
+$(POTFILE): $(SRC) cleanerml.pot desktop.pot metainfo.pot nsis.pot require-gettext
+	@echo "* Generating $(POTFILE)"
+	@if [ -f $(POTFILE) ]; then \
+		cp $(POTFILE) $(POTFILE).old; \
+		echo " Words before update: "; \
+		tail -n +20 $(POTFILE) | grep -v ^# | sed "s/\(msgstr\|msgid\)//g" | sort | uniq | wc -w; \
+	fi
+	cat cleanerml.pot desktop.pot metainfo.pot nsis.pot > $(POTFILE)
+	# --add-location=file: reduces size of diff
+	xgettext -o $(POTFILE) \
 		--join-existing \
 		--add-comments=TRANSLATORS \
 		--keyword="_p:1c,2" \
 		--default-domain=$(APP) \
-		$(SRC)
-	sed -i 's/charset=CHARSET/charset=utf-8/g' bleachbit.pot
+		--package-name=$(APP) \
+		--add-location=file \
+		$(PY_SRC)
+	xgettext -o $(POTFILE) \
+		--join-existing \
+		--add-comments=TRANSLATORS \
+		--default-domain=$(APP) \
+		--package-name=$(APP) \
+		--add-location=file \
+		--language=Glade \
+		$(UI_SRC)
+	# GNU sed accepts -i with no argument, but BSD sed (macOS) requires an
+	# extension argument. Using -i.bak works on both, and we remove the backup.
+	sed -i.bak 's/charset=CHARSET/charset=utf-8/g' $(POTFILE)
+	rm -f $(POTFILE).bak
 	echo " Words after update: " \
-		`tail -n +20 bleachbit.pot | grep -v ^# | sed "s/\(msgstr\|msgid\)//g" | sort | wc --words`
+		`tail -n +20 $(POTFILE) | grep -v ^# | sed "s/\(msgstr\|msgid\)//g" | sort | uniq | wc -w`
+	if [ -f $(POTFILE).old ]; then \
+		echo "msgid added or removed"; \
+		msgcomm -u $(POTFILE) $(POTFILE).old > diff.pot; \
+		sed -e '1,/^"Plural-Forms:/d' -e '/^#/d' -e '/^msgstr/d' -e '/^$$/d' diff.pot; \
+	fi
 
 
-refresh-po: $(POTFILE)
+refresh-po: $(POTFILE) require-gettext
 	@echo "* Refreshing .po files"
 	for oldpo in $(POFILES); do \
 		lang=`basename $$oldpo .po`; \
@@ -46,14 +102,15 @@ refresh-po: $(POTFILE)
 		mv $$lang.pot $$lang.po; \
 	done
 
-spelling: $(POTFILE)
+spelling: $(POTFILE) require-gettext
 	@echo "* Checking spelling"
 	@echo
-	@echo Word count: `msggrep -Kie . --no-wrap $(POTFILE)  | grep ^msgid  | cut -c 8- | wc --words`
+	@echo Word count: `msggrep -Kie . --no-wrap $(POTFILE)  | grep ^msgid  | cut -c 8- | wc -w`
 	@echo
-	msggrep -Kie . --no-wrap $(POTFILE)  | grep ^msgid  | cut -c 8- | aspell  list | sort -u
+	@command -v aspell >/dev/null 2>&1 || { echo "WARNING: Missing 'aspell'. apt users, try: sudo apt install aspell"; exit 0; }
+	msggrep -Kie . --no-wrap $(POTFILE)  | grep ^msgid  | cut -c 8- | aspell --personal=./aspell.pws list | sort -u
 
-%.mo: %.po
+%.mo: %.po require-gettext
 	@echo "* Generating $@"
 	msgfmt --statistics -o $@ $<
 
@@ -64,7 +121,8 @@ local: $(MOFILES)
 		mkdir -p ../locale/$$lang/LC_MESSAGES/; \
 		cp -lf $$mofile ../locale/$$lang/LC_MESSAGES/bleachbit.mo; \
 	done
-	@echo "Now you can run cd ..; python3 bleachbit/GUI.py"
+	@echo "To launch the application, run this in the project root directory:"
+	@echo "$(PYTHON) bleachbit.py"
 
 install: $(MOFILES)
 	echo "* Installing in $(DESTDIR)/usr/share/locale"
@@ -73,13 +131,23 @@ install: $(MOFILES)
 		DST=$(DESTDIR)/usr/share/locale/$$lang/LC_MESSAGES/; \
 		mkdir -p $$DST; \
 		cp $$MO $$DST/bleachbit.mo; \
-done
+	done
+
+tests: require-gettext
+	@echo "* Checking .po files with msgfmt --check"
+	@# msgfmt has no option to make warnings fatal, so fail on any output
+	@rc=0; \
+	for f in $(POFILES); do \
+		out=`msgfmt --check --check-format --no-hash -o /dev/null "$$f" 2>&1` || rc=1; \
+		if [ -n "$$out" ]; then echo "$$out"; rc=1; fi; \
+	done; \
+	exit $$rc
 
 clean:
 	echo "* Cleaning"
-	@rm -fv *.mo
-	@rm -fv $(APP).pot cleanerml.pot desktop.pot
+	@rm -fv -- *.mo
+	# Keep $(POTFILE) because it is stored in Git for Weblate.
+	@rm -fv $(POTFILE).old cleanerml.pot desktop.pot metainfo.pot nsis.pot diff.pot
 	@rm -rfv ../locale
 
-all: $(APP).pot $(MOFILES)
-
+all: $(POTFILE) $(MOFILES)

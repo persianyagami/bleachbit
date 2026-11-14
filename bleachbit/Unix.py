@@ -1,46 +1,40 @@
-# vim: ts=4:sw=4:expandtab
-# -*- coding: UTF-8 -*-
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 """
 Integration specific to Unix-like operating systems
 """
 
-import bleachbit
-from bleachbit import FileUtilities, General
-from bleachbit import _
-
+import configparser
+import errno
 import glob
 import logging
 import os
+import platform
+import posixpath
 import re
 import shlex
+import stat
 import subprocess
-import sys
+
+import bleachbit
+from bleachbit import FileUtilities, General, IS_MAC, IS_POSIX
+from bleachbit.FileUtilities import children_below, children_in_directory, exe_exists
+from bleachbit.Language import get_text as _, native_locale_names, \
+    LocaleCode
+from bleachbit.VFS import RealVFS
 
 logger = logging.getLogger(__name__)
 
-try:
-    Pattern = re.Pattern
-except AttributeError:
-    Pattern = re._pattern_type
+# Cache for snapd_is_active() to avoid repeated systemctl calls.
+_snapd_is_active_cache = None
+
+JOURNALD_REGEX = r'^Vacuuming done, freed ([\d.]+[BKMGT]?) of archived journals (on disk|from [\w/]+).$'
+
+_real_vfs = RealVFS()
 
 
 class LocaleCleanerPath:
@@ -49,51 +43,69 @@ class LocaleCleanerPath:
     and additional LocaleCleanerPaths that get traversed when asked to supply a list of localization
     items"""
 
-    def __init__(self, location):
+    def __init__(self, location, vfs=None):
         if location is None:
             raise RuntimeError("location is none")
         self.pattern = location
         self.children = []
+        self._vfs = vfs
+
+    def _get_vfs(self):
+        return self._vfs if self._vfs is not None else _real_vfs
 
     def add_child(self, child):
         """Adds a child LocaleCleanerPath"""
+        # child is the same class, so _vfs is not foreign.
+        # pylint: disable-next=protected-access
+        if isinstance(child, LocaleCleanerPath) and child._vfs is None:
+            # pylint: disable-next=protected-access
+            child._vfs = self._vfs
         self.children.append(child)
         return child
 
     def add_path_filter(self, pre, post):
-        """Adds a filter consisting of a prefix and a postfix
+        r"""Adds a filter consisting of a prefix and a postfix
         (e.g. 'foobar_' and '\.qm' to match 'foobar_en_US.utf-8.qm)"""
         try:
             regex = re.compile('^' + pre + Locales.localepattern + post + '$')
         except Exception as errormsg:
             raise RuntimeError(
-                "Malformed regex '%s' or '%s': %s" % (pre, post, errormsg))
+                f"Malformed regex '{pre}' or '{post}': {errormsg}") from errormsg
         self.add_child(regex)
+
+    def _listdir(self, path):
+        """List a directory, treating one that cannot be read as empty"""
+        try:
+            return self._get_vfs().listdir(path)
+        except OSError:
+            # Such as /usr/share/empty.sshd, which is mode 0711
+            return []
 
     def get_subpaths(self, basepath):
         """Returns direct subpaths for this object, i.e. either the named subfolder or all
         subfolders matching the pattern"""
-        if isinstance(self.pattern, Pattern):
-            return (os.path.join(basepath, p) for p in os.listdir(basepath)
-                    if self.pattern.match(p) and os.path.isdir(os.path.join(basepath, p)))
-        else:
-            path = os.path.join(basepath, self.pattern)
-            return [path] if os.path.isdir(path) else []
+        vfs = self._get_vfs()
+        if isinstance(self.pattern, re.Pattern):
+            names = self._listdir(basepath)
+            # posixpath is easy way to test also from Windows.
+            return (posixpath.join(basepath, p) for p in names
+                    if self.pattern.match(p) and vfs.isdir(posixpath.join(basepath, p)))
+        path = posixpath.join(basepath, self.pattern)
+        return [path] if vfs.isdir(path) else []
 
     def get_localizations(self, basepath):
         """Returns all localization items for this object and all descendant objects"""
         for path in self.get_subpaths(basepath):
             for child in self.children:
                 if isinstance(child, LocaleCleanerPath):
-                    for res in child.get_localizations(path):
-                        yield res
-                elif isinstance(child, Pattern):
-                    for element in os.listdir(path):
+                    yield from child.get_localizations(path)
+                elif isinstance(child, re.Pattern):
+                    for element in self._listdir(path):
                         match = child.match(element)
                         if match is not None:
                             yield (match.group('locale'),
                                    match.group('specifier'),
-                                   os.path.join(path, element))
+                                   posixpath.join(path, element))
 
 
 class Locales:
@@ -107,242 +119,10 @@ class Locales:
     localepattern =\
         r'(?P<locale>[a-z]{2,3})' \
         r'(?P<specifier>[_-][A-Z]{2,4})?(?:\.[\w]+[\d-]+|@\w+)?' \
-        r'(?P<encoding>[.-_](?:(?:ISO|iso|UTF|utf|us-ascii)[\d-]+|(?:euc|EUC)[A-Z]+))?'
+        r'(?P<encoding>[-._](?:(?:ISO|iso|UTF|utf|us-ascii)[\d-]+|(?:euc|EUC)[A-Z]+))?'
 
-    native_locale_names = \
-        {'aa': 'Afaraf',
-         'ab': 'аҧсуа бызшәа',
-         'ace': 'بهسا اچيه',
-         'ach': 'Acoli',
-         'ae': 'avesta',
-         'af': 'Afrikaans',
-         'ak': 'Akan',
-         'am': 'አማርኛ',
-         'an': 'aragonés',
-         'ang': 'Old English',
-         'anp': 'Angika',
-         'ar': 'العربية',
-         'as': 'অসমীয়া',
-         'ast': 'Asturianu',
-         'av': 'авар мацӀ',
-         'ay': 'aymar aru',
-         'az': 'azərbaycan dili',
-         'ba': 'башҡорт теле',
-         'bal': 'Baluchi',
-         'be': 'Беларуская мова',
-         'bg': 'български език',
-         'bh': 'भोजपुरी',
-         'bi': 'Bislama',
-         'bm': 'bamanankan',
-         'bn': 'বাংলা',
-         'bo': 'བོད་ཡིག',
-         'br': 'brezhoneg',
-         'brx': 'Bodo (India)',
-         'bs': 'босански',
-         'byn': 'Bilin',
-         'ca': 'català',
-         'ce': 'нохчийн мотт',
-         'cgg': 'Chiga',
-         'ch': 'Chamoru',
-         'ckb': 'Central Kurdish',
-         'co': 'corsu',
-         'cr': 'ᓀᐦᐃᔭᐍᐏᐣ',
-         'crh': 'Crimean Tatar',
-         'cs': 'česky',
-         'csb': 'Cashubian',
-         'cu': 'ѩзыкъ словѣньскъ',
-         'cv': 'чӑваш чӗлхи',
-         'cy': 'Cymraeg',
-         'da': 'dansk',
-         'de': 'Deutsch',
-         'doi': 'डोगरी; ڈوگرى',
-         'dv': 'ދިވެހި',
-         'dz': 'རྫོང་ཁ',
-         'ee': 'Eʋegbe',
-         'el': 'Ελληνικά',
-         'en': 'English',
-         'en_AU': 'Australian English',
-         'en_CA': 'Canadian English',
-         'en_GB': 'British English',
-         'eo': 'Esperanto',
-         'es': 'Español',
-         'es_419': 'Latin American Spanish',
-         'et': 'eesti',
-         'eu': 'euskara',
-         'fa': 'فارسی',
-         'ff': 'Fulfulde',
-         'fi': 'suomen kieli',
-         'fil': 'Wikang Filipino',
-         'fin': 'suomen kieli',
-         'fj': 'vosa Vakaviti',
-         'fo': 'føroyskt',
-         'fr': 'Français',
-         'frp': 'Arpitan',
-         'fur': 'Frilian',
-         'fy': 'Frysk',
-         'ga': 'Gaeilge',
-         'gd': 'Gàidhlig',
-         'gez': 'Geez',
-         'gl': 'galego',
-         'gn': 'Avañeẽ',
-         'gu': 'Gujarati',
-         'gv': 'Gaelg',
-         'ha': 'هَوُسَ',
-         'haw': 'Hawaiian',
-         'he': 'עברית',
-         'hi': 'हिन्दी',
-         'hne': 'Chhattisgarhi',
-         'ho': 'Hiri Motu',
-         'hr': 'Hrvatski',
-         'hsb': 'Upper Sorbian',
-         'ht': 'Kreyòl ayisyen',
-         'hu': 'Magyar',
-         'hy': 'Հայերեն',
-         'hz': 'Otjiherero',
-         'ia': 'Interlingua',
-         'id': 'Indonesian',
-         'ig': 'Asụsụ Igbo',
-         'ii': 'ꆈꌠ꒿',
-         'ik': 'Iñupiaq',
-         'ilo': 'Ilokano',
-         'ina': 'Interlingua',
-         'io': 'Ido',
-         'is': 'Íslenska',
-         'it': 'Italiano',
-         'iu': 'ᐃᓄᒃᑎᑐᑦ',
-         'iw': 'עברית',
-         'ja': '日本語',
-         'jv': 'basa Jawa',
-         'ka': 'ქართული',
-         'kab': 'Tazwawt',
-         'kac': 'Jingpho',
-         'kg': 'Kikongo',
-         'ki': 'Gĩkũyũ',
-         'kj': 'Kuanyama',
-         'kk': 'қазақ тілі',
-         'kl': 'kalaallisut',
-         'km': 'ខ្មែរ',
-         'kn': 'ಕನ್ನಡ',
-         'ko': '한국어',
-         'kok': 'Konkani',
-         'kr': 'Kanuri',
-         'ks': 'कश्मीरी',
-         'ku': 'Kurdî',
-         'kv': 'коми кыв',
-         'kw': 'Kernewek',
-         'ky': 'Кыргызча',
-         'la': 'latine',
-         'lb': 'Lëtzebuergesch',
-         'lg': 'Luganda',
-         'li': 'Limburgs',
-         'ln': 'Lingála',
-         'lo': 'ພາສາລາວ',
-         'lt': 'lietuvių kalba',
-         'lu': 'Tshiluba',
-         'lv': 'latviešu valoda',
-         'mai': 'Maithili',
-         'mg': 'fiteny malagasy',
-         'mh': 'Kajin M̧ajeļ',
-         'mhr': 'Eastern Mari',
-         'mi': 'te reo Māori',
-         'mk': 'македонски јазик',
-         'ml': 'മലയാളം',
-         'mn': 'монгол',
-         'mni': 'Manipuri',
-         'mr': 'मराठी',
-         'ms': 'بهاس ملايو',
-         'mt': 'Malti',
-         'my': 'ဗမာစာ',
-         'na': 'Ekakairũ Naoero',
-         'nb': 'Bokmål',
-         'nd': 'isiNdebele',
-         'nds': 'Plattdüütsch',
-         'ne': 'नेपाली',
-         'ng': 'Owambo',
-         'nl': 'Nederlands',
-         'nn': 'Norsk nynorsk',
-         'no': 'Norsk',
-         'nr': 'isiNdebele',
-         'nso': 'Pedi',
-         'nv': 'Diné bizaad',
-         'ny': 'chiCheŵa',
-         'oc': 'occitan',
-         'oj': 'ᐊᓂᔑᓈᐯᒧᐎᓐ',
-         'om': 'Afaan Oromoo',
-         'or': 'ଓଡ଼ିଆ',
-         'os': 'ирон æвзаг',
-         'pa': 'ਪੰਜਾਬੀ',
-         'pap': 'Papiamentu',
-         'pau': 'a tekoi er a Belau',
-         'pi': 'पाऴि',
-         'pl': 'polski',
-         'ps': 'پښتو',
-         'pt': 'Português',
-         'pt_BR': 'Português do Brasil',
-         'qu': 'Runa Simi',
-         'rm': 'rumantsch grischun',
-         'rn': 'Ikirundi',
-         'ro': 'română',
-         'ru': 'Pусский',
-         'rw': 'Ikinyarwanda',
-         'sa': 'संस्कृतम्',
-         'sat': 'ᱥᱟᱱᱛᱟᱲᱤ',
-         'sc': 'sardu',
-         'sd': 'सिन्धी',
-         'se': 'Davvisámegiella',
-         'sg': 'yângâ tî sängö',
-         'shn': 'Shan',
-         'si': 'සිංහල',
-         'sk': 'slovenčina',
-         'sl': 'slovenščina',
-         'sm': 'gagana faa Samoa',
-         'sn': 'chiShona',
-         'so': 'Soomaaliga',
-         'sq': 'Shqip',
-         'sr': 'Српски',
-         'ss': 'SiSwati',
-         'st': 'Sesotho',
-         'su': 'Basa Sunda',
-         'sv': 'svenska',
-         'sw': 'Kiswahili',
-         'ta': 'தமிழ்',
-         'te': 'తెలుగు',
-         'tet': 'Tetum',
-         'tg': 'тоҷикӣ',
-         'th': 'ไทย',
-         'ti': 'ትግርኛ',
-         'tig': 'Tigre',
-         'tk': 'Türkmen',
-         'tl': 'ᜏᜒᜃᜅ᜔ ᜆᜄᜎᜓᜄ᜔',
-         'tn': 'Setswana',
-         'to': 'faka Tonga',
-         'tr': 'Türkçe',
-         'ts': 'Xitsonga',
-         'tt': 'татар теле',
-         'tw': 'Twi',
-         'ty': 'Reo Tahiti',
-         'ug': 'Uyghur',
-         'uk': 'Українська',
-         'ur': 'اردو',
-         'uz': 'Ўзбек',
-         've': 'Tshivenḓa',
-         'vi': 'Tiếng Việt',
-         'vo': 'Volapük',
-         'wa': 'walon',
-         'wae': 'Walser',
-         'wal': 'Wolaytta',
-         'wo': 'Wollof',
-         'xh': 'isiXhosa',
-         'yi': 'ייִדיש',
-         'yo': 'Yorùbá',
-         'za': 'Saɯ cueŋƅ',
-         'zh': '中文',
-         'zh_CN': '中文',
-         'zh_TW': '中文',
-         'zu': 'isiZulu'}
-
-    def __init__(self):
-        self._paths = LocaleCleanerPath(location='/')
+    def __init__(self, vfs=None):
+        self._paths = LocaleCleanerPath(location='/', vfs=vfs)
 
     def add_xml(self, xml_node, parent=None):
         """Parses the xml data and adds nodes to the LocaleCleanerPath-tree"""
@@ -377,7 +157,7 @@ class Locales:
                     userfilter = xml_node.getAttribute('filter')
                     if 1 != userfilter.count('*'):
                         raise RuntimeError(
-                            "Filter string '%s' must contain the placeholder * exactly once" % userfilter)
+                            f"Filter string '{userfilter}' must contain the placeholder * exactly once")
 
                     # we can't use re.escape, because it escapes too much
                     (pre, post) = (re.sub(r'([\[\]()^$.])', r'\\\1', p)
@@ -385,7 +165,7 @@ class Locales:
                     parent.add_path_filter(pre, post)
         else:
             raise RuntimeError(
-                "Invalid node '%s', expected '<path>' or '<regexfilter>'" % xml_node.nodeName)
+                f"Invalid node '{xml_node.nodeName}', expected '<path>' or '<regexfilter>'")
 
         # handle child nodes
         for child_xml in xml_node.childNodes:
@@ -393,63 +173,369 @@ class Locales:
 
     def localization_paths(self, locales_to_keep):
         """Returns all localization items matching the previously added xml configuration"""
-        if not locales_to_keep:
-            raise RuntimeError('Found no locales to keep')
-        purgeable_locales = frozenset((locale for locale in Locales.native_locale_names.keys()
-                                       if locale not in locales_to_keep))
+        purgeable_locales = get_purgeable_locales(locales_to_keep)
+        # Overlapping rules, e.g. for Qt translations, can match a path twice
+        seen = set()
 
         for (locale, specifier, path) in self._paths.get_localizations('/'):
             specific = locale + (specifier or '')
             if specific in purgeable_locales or \
                     (locale in purgeable_locales and specific not in locales_to_keep):
-                yield path
+                if path not in seen:
+                    seen.add(path)
+                    yield path
 
 
-def __is_broken_xdg_desktop_application(config, desktop_pathname):
-    """Returns boolean whether application deskop entry file is broken"""
+def _is_broken_xdg_desktop_application(config, desktop_pathname):
+    """Returns whether application .desktop file is critically broken
+
+    This function tests only .desktop files with Type=Application.
+    """
     if not config.has_option('Desktop Entry', 'Exec'):
         logger.info(
-            "is_broken_xdg_menu: missing required option 'Exec': '%s'", desktop_pathname)
+            "is_broken_xdg_menu: missing required option 'Exec' in '%s'", desktop_pathname)
         return True
-    exe = config.get('Desktop Entry', 'Exec').split(" ")[0]
+    exec_val = config.get('Desktop Entry', 'Exec')
+    try:
+        exec_parts = shlex.split(exec_val)
+    except ValueError as e:
+        # Malformed quoting in the Exec value. Per the XDG Desktop Entry
+        # spec this is undefined behavior; be conservative and keep the
+        # file rather than risk deleting a working launcher.
+        logger.warning(
+            "is_broken_xdg_menu: cannot parse 'Exec' key (%s) in '%s'", e, desktop_pathname)
+        return False
+    if not exec_parts:
+        logger.info(
+            "is_broken_xdg_menu: empty 'Exec' value in '%s'", desktop_pathname)
+        return True
+    exe = exec_parts[0]
+    if not os.path.isabs(exe) and not os.environ.get('PATH'):
+        raise RuntimeError(
+            f"Cannot find executable '{exe}' because PATH environment variable is not set")
     if not FileUtilities.exe_exists(exe):
         logger.info(
-            "is_broken_xdg_menu: executable '%s' does not exist '%s'", exe, desktop_pathname)
+            "is_broken_xdg_menu: executable '%s' does not exist in '%s'", exe, desktop_pathname)
         return True
     if 'env' == exe:
         # Wine v1.0 creates .desktop files like this
         # Exec=env WINEPREFIX="/home/z/.wine" wine "C:\\Program
         # Files\\foo\\foo.exe"
-        execs = shlex.split(config.get('Desktop Entry', 'Exec'))
+        execs = list(exec_parts)
         wineprefix = None
         del execs[0]
-        while True:
-            if 0 <= execs[0].find("="):
-                (name, value) = execs[0].split("=")
-                if 'WINEPREFIX' == name:
-                    wineprefix = value
-                del execs[0]
-            else:
-                break
+        if execs and execs[0].startswith('-'):
+            # env options like -u VAR: keep it rather than guess the command
+            return False
+        while execs and execs[0].find("=") >= 0:
+            (name, value) = execs[0].split("=", 1)
+            if name == 'WINEPREFIX':
+                wineprefix = value
+            del execs[0]
+        if not execs:
+            # env with only assignments, no command; keep the launcher
+            return False
         if not FileUtilities.exe_exists(execs[0]):
             logger.info(
-                "is_broken_xdg_menu: executable '%s' does not exist '%s'", execs[0], desktop_pathname)
+                "is_broken_xdg_menu: executable '%s' does not exist in '%s'", execs[0], desktop_pathname)
             return True
         # check the Windows executable exists
-        if wineprefix:
+        # Only C: is inside the prefix; other drives may be unmounted media
+        if wineprefix and len(execs) > 1 and re.match(r'[Cc]:[\\/]', execs[1]):
             windows_exe = wine_to_linux_path(wineprefix, execs[1])
             if not os.path.exists(windows_exe):
-                logger.info("is_broken_xdg_menu: Windows executable '%s' does not exist '%s'",
+                logger.info("is_broken_xdg_menu: Windows executable '%s' does not exist in '%s'",
                             windows_exe, desktop_pathname)
                 return True
     return False
+
+
+def find_available_locales():
+    """Returns a list of available locales using locale -a"""
+    try:
+        rc, stdout, stderr = General.run_external(
+            [General.resolve_exe('locale'), '-a'])
+    except OSError as e:
+        # musl systems may have no locale utility
+        logger.warning("Failed to get available locales: %s", e)
+        return []
+    if rc == 0:
+        return stdout.strip().split('\n')
+
+    logger.warning("Failed to get available locales: %s", stderr)
+    return []
+
+
+def find_best_locale(user_locale):
+    """Find closest match to available locales, preferring UTF-8
+
+    BleachBit's code and .po files are UTF-8 and GTK 3 requires UTF-8
+    for display strings, so a non-UTF-8 locale is returned only when
+    UTF-8 is not available.
+    """
+    assert isinstance(user_locale, str)
+    req = LocaleCode(user_locale)
+    if not req.raw:
+        return 'C'
+    if req.is_special:
+        return req.raw
+    available_raw = find_available_locales()
+    available = [LocaleCode(a) for a in available_raw]
+
+    # Exact match if already UTF-8.
+    if req.is_utf8 and req.raw in available_raw:
+        return req.raw
+
+    # Prefer current system locale if compatible and UTF-8
+    # (e.g., system is 'es_MX.UTF-8' when requesting 'es').
+    # Import here for mock patch.
+    import locale
+    lang, codeset = locale.getlocale()
+    if lang and codeset and lang.startswith(req.normalized) and \
+            codeset.replace('-', '').replace('_', '').lower() == 'utf8':
+        return '.'.join((lang, codeset))
+
+    # Otherwise search installed locales for UTF-8 (e.g., 'es_ES.utf8').
+    for avail in available:
+        if avail.normalized.startswith(req.normalized) and avail.is_utf8:
+            return avail.raw
+
+    # Fall back to exact non-UTF-8 match (e.g., 'de_DE@euro').
+    for candidate in (req.raw, req.normalized):
+        if candidate in available_raw:
+            return candidate
+
+    # Fall back to any installed match (e.g., 'en_US.iso88591').
+    for avail in available:
+        if avail.normalized.startswith(req.normalized):
+            return avail.raw
+
+    return 'C'
+
+
+def get_distribution_name_version_platform_freedesktop():
+    """Returns the name and version of the distribution using
+    platform.freedesktop_os_release()
+
+    Example return value: 'ubuntu 24.10' or None
+
+    Python 3.10 added platform.freedesktop_os_release().
+    """
+    if hasattr(platform, 'freedesktop_os_release'):
+        try:
+            release = platform.freedesktop_os_release()
+        except FileNotFoundError:
+            return None
+        dist_id = release.get('ID')
+        # Arch Linux omits VERSION_ID, so fall back to BUILD_ID.
+        # Ubuntu has VERSION_ID but not BUILD_ID.
+        dist_version_id = release.get('VERSION_ID') or release.get('BUILD_ID')
+        if dist_id and dist_version_id:
+            return f"{dist_id} {dist_version_id}"
+    return None
+
+
+def get_distribution_name_version_distro():
+    """Returns the name and version of the distribution using the distro
+    package
+
+    Example return value: 'ubuntu 24.10' or None
+
+    distro is a third-party package recommended here:
+    https://docs.python.org/3.7/library/platform.html
+    """
+    try:
+        # Import here in case of ImportError.
+        import distro
+        # example 'ubuntu 24.10'
+        # Arch Linux returns id='arch' and version=''.
+        dist_version = distro.version()
+        if dist_version:
+            return distro.id() + ' ' + dist_version
+    except ImportError:
+        return None
+    return None
+
+
+def get_distribution_name_version_os_release():
+    """Returns the name and version of the distribution using /etc/os-release
+
+    Example return value: 'ubuntu 24.10' or None
+    """
+    if not os.path.exists('/etc/os-release'):
+        return None
+    try:
+        with open('/etc/os-release', 'r', encoding='utf-8') as f:
+            os_release = {}
+            for line in f:
+                if '=' in line:
+                    key, value = line.rstrip().split('=', 1)
+                    os_release[key] = value.strip('"\'')
+    except Exception as e:
+        logger.debug("Error reading /etc/os-release: %s", e)
+        return None
+    if 'ID' in os_release:
+        dist_name = os_release['ID']
+        # ArchLinux has BUILD_ID='rolling' but not VERSION_ID.
+        # Ubuntu has VERSION_ID like '26.04' but does not have BUILD_ID.
+        dist_version = os_release.get(
+            'VERSION_ID') or os_release.get('BUILD_ID')
+        if dist_version:
+            return f"{dist_name} {dist_version}"
+    return None
+
+
+def get_distribution_name_version():
+    """Returns the name and version of the distribution
+
+    Depending on system capabilities, return value may be:
+    * 'ubuntu 24.10'
+    * 'Linux 6.12.3'
+    * 'Linux'
+
+    Python 3.7 had platform.linux_distribution(), but it
+    was removed in Python 3.8.
+    """
+    for get_dist in (get_distribution_name_version_platform_freedesktop,
+                     get_distribution_name_version_distro,
+                     get_distribution_name_version_os_release):
+        if ret := get_dist():
+            return ret
+    for name, get_release in (('platform.release()', platform.release),
+                              ('os.uname()', lambda: os.uname().release)):
+        try:
+            # example '6.12.3-061203-generic'
+            linux_version = get_release().split('-')[0]
+            return f"Linux {linux_version}"
+        except Exception as e:
+            logger.debug("Error calling %s: %s", name, e)
+    return "Linux"
+
+
+def get_mount_points():
+    """Return read-write mount points that may have trash"""
+    try:
+        import psutil
+    except ImportError:
+        logger.warning('install psutil for better trash detection')
+        return []
+    mount_points = []
+    try:
+        for partition in psutil.disk_partitions():
+            mountpoint = partition.mountpoint
+            if re.match(r'^/(proc|sys|dev|run|boot)', mountpoint):
+                continue
+            if 'ro' in partition.opts.split(','):
+                continue
+            mount_points.append(mountpoint)
+    except (OSError, psutil.Error) as e:
+        logger.warning("Error getting mount points: %s", e)
+    return mount_points
+
+
+def get_purgeable_locales(locales_to_keep):
+    """Returns all locales to be purged"""
+    if not locales_to_keep:
+        raise RuntimeError('Found no locales to keep')
+
+    assert isinstance(locales_to_keep, list)
+
+    # Start with all locales as potentially purgeable
+    purgeable_locales = set(native_locale_names.keys())
+
+    # Remove the locales we want to keep
+    for keep in locales_to_keep:
+        keep_loc = LocaleCode(keep)
+        purgeable_locales.discard(keep)
+        # If keeping a variant (e.g. 'en_US'), also keep the base locale (e.g. 'en')
+        if keep_loc.territory:
+            purgeable_locales.discard(keep_loc.language)
+        # If keeping a base locale (e.g. 'en'), also keep all its variants (e.g. 'en_US')
+        else:
+            purgeable_locales = {locale for locale in purgeable_locales
+                                 if LocaleCode(locale).language != keep_loc.language}
+
+    return frozenset(purgeable_locales)
+
+
+def _is_own_dir(path, uid):
+    """Return whether path is a directory owned by uid and not a link"""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == uid
+
+
+def get_trash_paths():
+    """Iterate over all trash on POSIX systems"""
+    # Import here to avoid a circular import.
+    from bleachbit import Command
+    # macOS-style flat trash. list_directories=True is required so that
+    # a folder sent to Trash is itself removed after its contents are
+    # deleted; with False, only files inside it are yielded and the now-
+    # empty folder is left behind forever.
+    dirname = os.path.expanduser("~/.Trash")
+    for filename in children_in_directory(dirname, True):
+        yield Command.Delete(filename)
+    # Freedesktop trash spec directories
+    # https://specifications.freedesktop.org/trash-spec/trashspec-1.0.html
+    home_trash = os.path.join(
+        os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share')),
+        'Trash')
+    fallback_trash = os.path.expanduser('~/.local/share/Trash')
+    # (trash dir, top): no link below top is followed
+    trash_dirs = [(home_trash, None)]
+    if home_trash != fallback_trash:
+        trash_dirs.append((fallback_trash, None))
+    # Snap apps store trash under ~/snap/<app>/<revision>/.local/share/Trash
+    snap_dir = os.path.expanduser("~/snap")
+    for d in glob.glob(os.path.join(snap_dir, "*/*/.local/share/Trash")):
+        # Do not follow revision symlinks. For example, current -> 238 would match twice.
+        rev_dir = os.path.dirname(os.path.dirname(os.path.dirname(d)))
+        if not os.path.islink(rev_dir):
+            trash_dirs.append((d, snap_dir))
+    # Per-mountpoint trash (method 1: .Trash/$uid, method 2: .Trash-$uid)
+    uid = os.getuid()
+    for mountpoint in get_mount_points():
+        # The spec only allows a sticky .Trash that is not a link
+        try:
+            shared_mode = os.lstat(os.path.join(mountpoint, '.Trash')).st_mode
+        except OSError:
+            shared_mode = 0
+        if stat.S_ISDIR(shared_mode) and shared_mode & stat.S_ISVTX:
+            trash_dirs.append(
+                (os.path.join(mountpoint, '.Trash', str(uid)), mountpoint))
+        trash_dirs.append(
+            (os.path.join(mountpoint, f'.Trash-{uid}'), mountpoint))
+    # Deduplicate while preserving order
+    seen = set()
+    for trash_dir, top in trash_dirs:
+        if top is None:
+            # A trash dir the user made a link is still followed
+            top = trash_dir
+        elif not _is_own_dir(trash_dir, uid):
+            # A snap, another user or a removable disk may control it
+            continue
+        real_path = os.path.realpath(trash_dir)
+        if real_path in seen:
+            continue
+        seen.add(real_path)
+        for subdir in ('files', 'info', 'expunged'):
+            dirname = os.path.join(trash_dir, subdir)
+            for filename, _st in children_below(
+                    dirname, list_directories=True, top=top):
+                yield Command.Delete(filename, top=top)
 
 
 def is_unregistered_mime(mimetype):
     """Returns True if the MIME type is known to be unregistered. If
     registered or unknown, conservatively returns False."""
     try:
-        from gi.repository import Gio
+        from bleachbit.GtkShim import Gio
+        # GtkShim gives None, not ImportError, without a display or PyGObject
+        if Gio is None:
+            return False
         if 0 == len(Gio.app_info_get_all_for_type(mimetype)):
             return True
     except ImportError:
@@ -459,17 +545,34 @@ def is_unregistered_mime(mimetype):
 
 
 def is_broken_xdg_desktop(pathname):
-    """Returns boolean whether the given XDG desktop entry file is broken.
-    Reference: http://standards.freedesktop.org/desktop-entry-spec/latest/"""
-    config = bleachbit.RawConfigParser()
-    config.read(pathname)
+    """Returns whether the given XDG .desktop file is critically broken.
+    Reference: https://specifications.freedesktop.org/desktop-entry/latest/"""
+    config = configparser.RawConfigParser()
+    try:
+        config.read(pathname)
+    except UnicodeDecodeError:
+        logger.info(
+            "is_broken_xdg_menu: cannot decode file: '%s'", pathname)
+        return True
+    except (configparser.Error) as e:
+        logger.info(
+            "is_broken_xdg_menu: %s: '%s'", e, pathname)
+        return True
     if not config.has_section('Desktop Entry'):
         logger.info(
             "is_broken_xdg_menu: missing required section 'Desktop Entry': '%s'", pathname)
         return True
+    # Hidden=true hides a system entry, so it may omit the other keys
+    if config.has_option('Desktop Entry', 'Hidden') and \
+            config.get('Desktop Entry', 'Hidden').strip().lower() == 'true':
+        return False
     if not config.has_option('Desktop Entry', 'Type'):
         logger.info(
             "is_broken_xdg_menu: missing required option 'Type': '%s'", pathname)
+        return True
+    if not config.has_option('Desktop Entry', 'Name'):
+        logger.info(
+            "is_broken_xdg_menu: missing required option 'Name': '%s'", pathname)
         return True
     file_type = config.get('Desktop Entry', 'Type').strip().lower()
     if 'link' == file_type:
@@ -490,81 +593,106 @@ def is_broken_xdg_desktop(pathname):
                 "is_broken_xdg_menu: MimeType '%s' not registered '%s'", mimetype, pathname)
             return True
         return False
-    if 'application' != file_type:
-        logger.warning("unhandled type '%s': file '%s'", file_type, pathname)
-        return False
-    if __is_broken_xdg_desktop_application(config, pathname):
-        return True
+    if 'application' == file_type:
+        return _is_broken_xdg_desktop_application(config, pathname)
+    logger.warning("unhandled type '%s': file '%s'", file_type, pathname)
     return False
-
-
-def is_running_darwin(exename, run_ps=None):
-    if run_ps is None:
-        def run_ps():
-            return subprocess.check_output(["ps", "aux", "-c"])
-    try:
-        processess = (re.split(r"\s+", p, 10)[10]
-                      for p in run_ps().split("\n") if p != "")
-        next(processess)  # drop the header
-        return exename in processess
-    except IndexError:
-        raise RuntimeError("Unexpected output from ps")
-
-
-def is_running_linux(exename):
-    """Check whether exename is running"""
-    for filename in glob.iglob("/proc/*/exe"):
-        try:
-            target = os.path.realpath(filename)
-        except TypeError:
-            # happens, for example, when link points to
-            # '/etc/password\x00 (deleted)'
-            continue
-        except OSError:
-            # 13 = permission denied
-            continue
-        # Google Chrome shows 74 on Ubuntu 19.04 shows up as
-        # /opt/google/chrome/chrome (deleted)
-        found_exename = os.path.basename(target).replace(' (deleted)', '')
-        if exename == found_exename:
-            return True
-    return False
-
-
-def is_running(exename):
-    """Check whether exename is running"""
-    if sys.platform.startswith('linux'):
-        return is_running_linux(exename)
-    elif ('darwin' == sys.platform or
-          sys.platform.startswith('openbsd') or
-          sys.platform.startswith('freebsd')):
-        return is_running_darwin(exename)
-    else:
-        raise RuntimeError('unsupported platform for physical_free()')
 
 
 def rotated_logs():
-    """Yield a list of rotated (i.e., old) logs in /var/log/"""
-    # Ubuntu 9.04
-    # /var/log/dmesg.0
-    # /var/log/dmesg.1.gz
-    # Fedora 10
-    # /var/log/messages-20090118
-    globpaths = ('/var/log/*.[0-9]',
-                 '/var/log/*/*.[0-9]',
-                 '/var/log/*.gz',
-                 '/var/log/*/*gz',
-                 '/var/log/*/*.old',
-                 '/var/log/*.old')
-    for globpath in globpaths:
-        for path in glob.iglob(globpath):
+    """Yield a list of rotated (i.e., old) logs in /var/log/
+
+    See:
+    https://bugs.launchpad.net/bleachbit/+bug/367575
+    https://github.com/bleachbit/bleachbit/issues/1744
+    """
+    keep_lists = [re.compile(r'/var/log/(removed_)?(packages|scripts)'),
+                  re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}')]
+    # Anchored so live logs like Xorg.0.log and php8.1-fpm.log are kept
+    positive_re = re.compile(
+        r'(\.(\d+|bz2|gz|lz4|xz|zst|old)|-\d{8}(\d{2})?)$')
+
+    for path in bleachbit.FileUtilities.children_in_directory('/var/log'):
+        if bleachbit.FileUtilities.whitelisted(path):
+            continue
+
+        # On macOS, skip a path only if its parent dir exists and we
+        # truly lack write access (a missing parent must not count as
+        # 'no permission', since os.access() returns False for both).
+        parent_dir = os.path.dirname(path)
+        if IS_MAC and os.path.isdir(parent_dir) and not os.access(parent_dir, os.W_OK):
+            continue
+
+        if any(keep_list.search(path) for keep_list in keep_lists):
+            continue
+        if positive_re.search(path):
             yield path
-    regex = '-[0-9]{8}$'
-    globpaths = ('/var/log/*-*', '/var/log/*/*-*')
-    for path in FileUtilities.globex(globpaths, regex):
-        whitelist_re = '^/var/log/(removed_)?(packages|scripts)'
-        if re.match(whitelist_re, path) is None:  # for Slackware, Launchpad #367575
-            yield path
+
+
+def orphaned_framework_versions(versions_dir):
+    """Yield paths of files (and, once emptied, the folder itself)
+    inside each orphaned version folder under a macOS .app's
+    Contents/Frameworks/*.framework/Versions/ directory.
+
+    Individual files are yielded rather than each orphaned folder as a
+    single unit because Command.Delete sizes a directory via a single
+    lstat(), reflecting only the directory inode itself (near 0 bytes)
+    rather than its actual recursive disk usage.
+
+    Chromium-based browsers on macOS (e.g. Google Chrome) keep every
+    version they have ever been updated to/from inside this directory,
+    with a 'Current' symlink pointing at the one actually in use.
+    Google's own auto-update mechanism has never reliably cleaned up
+    the old ones (a bug reported publicly since at least 2011), so
+    these can accumulate to several GB over the lifetime of an
+    installation.
+
+    Only 'Current' identifies the version genuinely in use -- version
+    numbers are not orderable across schemes (e.g. '152.0.7977.83' vs
+    '152.1.94.117') and a folder's modification time can be misleading
+    (e.g. after restoring from a backup), so both are deliberately
+    ignored here. If 'Current' cannot be read as a valid symlink to an
+    existing sibling directory, nothing is yielded at all, erring on
+    the side of not deleting anything rather than guessing which
+    version is safe to remove.
+    """
+    current_link = os.path.join(versions_dir, 'Current')
+    if not os.path.islink(current_link):
+        return
+    try:
+        current_target = os.readlink(current_link)
+    except OSError:
+        return
+    # The symlink is typically relative (e.g. '152.0.7977.83'), but
+    # tolerate an absolute target too.
+    current_name = os.path.basename(current_target.rstrip('/'))
+    current_real = os.path.realpath(current_link)
+    if not os.path.isdir(current_real):
+        # 'Current' points at something that doesn't exist -- do not
+        # guess which folder is safe to remove.
+        return
+    try:
+        entries = os.listdir(versions_dir)
+    except OSError:
+        return
+    for name in entries:
+        if name in ('Current', current_name):
+            continue
+        full_path = os.path.join(versions_dir, name)
+        if not os.path.isdir(full_path) or os.path.islink(full_path):
+            continue
+        # Yield each file individually (rather than the folder as one
+        # unit) so Command.Delete reports the real disk space freed --
+        # it sizes a directory via a single lstat(), which reflects
+        # only the directory inode itself (near 0 bytes), not its
+        # recursive content. children_in_directory() only yields items
+        # found INSIDE full_path (with list_directories=True also
+        # yielding any nested subdirectories, once emptied) -- it never
+        # yields full_path itself, so that is yielded explicitly last,
+        # once its own contents have all been accounted for above.
+        yield from bleachbit.FileUtilities.children_in_directory(
+            full_path, list_directories=True)
+        yield full_path
 
 
 def wine_to_linux_path(wineprefix, windows_pathname):
@@ -576,7 +704,7 @@ def wine_to_linux_path(wineprefix, windows_pathname):
     return os.path.join(wineprefix, windows_pathname)
 
 
-def run_cleaner_cmd(cmd, args, freed_space_regex=r'[\d.]+[kMGTE]?B?', error_line_regexes=None):
+def run_cleaner_cmd(cmd, args, freed_space_regex=r'[\d.]+[kMGTE]?B?', error_line_regexes=None, hformat='si'):
     """Runs a specified command and returns how much space was (reportedly) freed.
     The subprocess shouldn't need any user input and the user should have the
     necessary rights.
@@ -588,14 +716,15 @@ def run_cleaner_cmd(cmd, args, freed_space_regex=r'[\d.]+[kMGTE]?B?', error_line
     error_line_regexes = [re.compile(regex)
                           for regex in error_line_regexes or []]
 
-    env = {'LC_ALL': 'C', 'PATH': os.getenv('PATH')}
+    env = General.sanitize_root_env(
+        {'LC_ALL': 'C', 'PATH': os.getenv('PATH') or os.defpath})
     output = subprocess.check_output([cmd] + args, stderr=subprocess.STDOUT,
                                      universal_newlines=True, env=env)
     freed_space = 0
     for line in output.split('\n'):
         m = freed_space_regex.match(line)
         if m is not None:
-            freed_space += FileUtilities.human_to_bytes(m.group(1))
+            freed_space += FileUtilities.human_to_bytes(m.group(1), hformat)
         for error_re in error_line_regexes:
             if error_re.search(line):
                 raise RuntimeError('Invalid output from %s: %s' % (cmd, line))
@@ -605,12 +734,12 @@ def run_cleaner_cmd(cmd, args, freed_space_regex=r'[\d.]+[kMGTE]?B?', error_line
 
 def journald_clean():
     """Clean the system journals"""
-    freed_space_regex = '^Vacuuming done, freed ([\d.]+[KMGT]?) of archived journals on disk.$'
     try:
-        return run_cleaner_cmd('journalctl', ['--vacuum-size=1'], freed_space_regex)
+        # journalctl prints 1024-based sizes such as 128.0K and 8.0M
+        return run_cleaner_cmd(General.resolve_exe('journalctl'), ['--vacuum-size=1'], JOURNALD_REGEX, hformat='du')
     except subprocess.CalledProcessError as e:
-        raise RuntimeError("Error calling '%s':\n%s" %
-                           (' '.join(e.cmd), e.output))
+        raise RuntimeError(
+            f"Error calling '{' '.join(e.cmd)}':\n{e.output}") from e
 
 
 def apt_autoremove():
@@ -621,37 +750,39 @@ def apt_autoremove():
     # After this operation, 44.0 kB disk space will be freed.
     freed_space_regex = r'.*, ([\d.]+ ?[a-zA-Z]{2}) disk space will be freed.'
     try:
-        return run_cleaner_cmd('apt-get', args, freed_space_regex, ['^E: '])
+        return run_cleaner_cmd(General.resolve_exe('apt-get'), args, freed_space_regex, ['^E: '])
     except subprocess.CalledProcessError as e:
-        raise RuntimeError("Error calling '%s':\n%s" %
-                           (' '.join(e.cmd), e.output))
+        raise RuntimeError(
+            f"Error calling '{' '.join(e.cmd)}':\n{e.output}") from e
 
 
 def apt_autoclean():
     """Run 'apt-get autoclean' and return the size (un-rounded, in bytes) of freed space"""
     try:
-        return run_cleaner_cmd('apt-get', ['autoclean'], r'^Del .*\[([\d.]+[a-zA-Z]{2})}]', ['^E: '])
+        return run_cleaner_cmd(General.resolve_exe('apt-get'), ['autoclean'], r'^Del .*\[([\d.]+ ?[a-zA-Z]{2})\]', ['^E: '])
     except subprocess.CalledProcessError as e:
-        raise RuntimeError("Error calling '%s':\n%s" %
-                           (' '.join(e.cmd), e.output))
+        raise RuntimeError(
+            f"Error calling '{' '.join(e.cmd)}':\n{e.output}") from e
 
 
 def apt_clean():
     """Run 'apt-get clean' and return the size in bytes of freed space"""
     old_size = get_apt_size()
     try:
-        run_cleaner_cmd('apt-get', ['clean'], '^unused regex$', ['^E: '])
+        run_cleaner_cmd(General.resolve_exe('apt-get'),
+                        ['clean'], '^unused regex$', ['^E: '])
     except subprocess.CalledProcessError as e:
-        raise RuntimeError("Error calling '%s':\n%s" %
-                           (' '.join(e.cmd), e.output))
+        raise RuntimeError(
+            f"Error calling '{' '.join(e.cmd)}':\n{e.output}") from e
     new_size = get_apt_size()
     return old_size - new_size
 
 
 def get_apt_size():
     """Return the size of the apt cache (in bytes)"""
-    (rc, stdout, stderr) = General.run_external(['apt-get', '-s', 'clean'])
-    paths = re.findall('/[/a-z\.\*]+', stdout)
+    (_rc, stdout, _stderr) = General.run_external(
+        [General.resolve_exe('apt-get'), '-s', 'clean'])
+    paths = re.findall(r'/[/a-z\.\*]+', stdout)
     return get_globs_size(paths)
 
 
@@ -660,7 +791,10 @@ def get_globs_size(paths):
     total_size = 0
     for path in paths:
         for p in glob.iglob(path):
-            total_size += FileUtilities.getsize(p)
+            try:
+                total_size += FileUtilities.getsize(p)
+            except FileNotFoundError:
+                logger.debug('%s vanished while totalling sizes', p)
     return total_size
 
 
@@ -670,13 +804,27 @@ def yum_clean():
         msg = _(
             "%s cannot be cleaned because it is currently running.  Close it, and try again.") % "Yum"
         raise RuntimeError(msg)
+    # On Fedora yum is DNF5, which cleans only the user's cache when not root
+    if os.geteuid() != 0:
+        raise RuntimeError(
+            # TRANSLATORS: %s is the package manager, such as Yum or Dnf
+            _("%s cannot be cleaned without root permissions.") % "Yum")
 
     old_size = FileUtilities.getsizedir('/var/cache/yum')
     args = ['--enablerepo=*', 'clean', 'all']
     invalid = ['You need to be root', 'Cannot remove rpmdb file']
-    run_cleaner_cmd('yum', args, '^unused regex$', invalid)
+    try:
+        run_cleaner_cmd(General.resolve_exe('yum'),
+                        args, '^unused regex$', invalid)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"Error calling '{' '.join(str(part) for part in e.cmd)}':\n{e.output}") from e
     new_size = FileUtilities.getsizedir('/var/cache/yum')
     return old_size - new_size
+
+
+# Fail instead of waiting for the lock; DNF5 accepts but ignores it
+DNF_EXIT_ON_LOCK = '--setopt=exit_on_lock=True'
 
 
 def dnf_clean():
@@ -685,23 +833,99 @@ def dnf_clean():
         msg = _(
             "%s cannot be cleaned because it is currently running.  Close it, and try again.") % "Dnf"
         raise RuntimeError(msg)
+    if not FileUtilities.exe_exists(General.resolve_exe('dnf')):
+        raise RuntimeError(_('Executable not found: %s') % 'dnf')
+    # DNF5 permits "clean all" as a non-root user, but it then cleans the
+    # per-user cache (~/.cache/libdnf5) instead of the system cache
+    # (/var/cache/dnf) that this function measures. Require root so the
+    # returned byte count reflects real system-cache cleaning rather than
+    # silently returning 0.
+    if os.geteuid() != 0:
+        raise RuntimeError(
+            # TRANSLATORS: %s is the package manager, such as Yum or Dnf
+            _("%s cannot be cleaned without root permissions.") % "Dnf")
 
+    # DNF4 does not report freed space in its output, so infer effect
+    # by measuring the delta in directory size.
     old_size = FileUtilities.getsizedir('/var/cache/dnf')
-    args = ['--enablerepo=*', 'clean', 'all']
+    args = [General.resolve_exe('dnf'), '--enablerepo=*',
+            DNF_EXIT_ON_LOCK, 'clean', 'all']
     invalid = ['You need to be root', 'Cannot remove rpmdb file']
-    run_cleaner_cmd('dnf', args, '^unused regex$', invalid)
+    (rc, stdout, stderr) = General.run_external(args)
+    allout = stdout + stderr
+    for line in allout.split('\n'):
+        for error_re in invalid:
+            if re.search(error_re, line):
+                raise RuntimeError(f'Invalid output from dnf: {line}')
+    if rc > 0:
+        raise RuntimeError(f'dnf clean raised error {rc}: {stderr}')
+    match = DNF5_CLEAN_ERRORS_RE.search(allout)
+    if match:
+        raise RuntimeError(f'dnf clean reported {match.group(1)} errors')
+
+    # DNF5 reports the freed space directly in its summary line.
+    freed_bytes = parse_dnf_freed_space(allout)
+    if freed_bytes is not None:
+        logger.debug('dnf_clean >> parsed freed bytes: %s', freed_bytes)
+        return freed_bytes
+
+    # DNF4 fallback: measure the cache directory.
     new_size = FileUtilities.getsizedir('/var/cache/dnf')
 
     return old_size - new_size
 
 
-units = {"B": 1, "k": 10**3, "M": 10**6, "G": 10**9}
+units = {"B": 1, "k": 10**3, "M": 10**6, "G": 10**9,
+         "KiB": 2**10, "MiB": 2**20, "GiB": 2**30, "TiB": 2**40}
+
+_DNF_UNITS = {
+    ' ': 1, 'k': 1024, 'M': 1024**2, 'G': 1024**3,
+    'T': 1024**4, 'P': 1024**5, 'E': 1024**6,
+    'Z': 1024**7, 'Y': 1024**8,
+}
+
+# DNF5 (a total rewrite of DNF4) uses explicit 1024-based binary unit
+# symbols produced by libdnf5::cli::utils::units::to_size().
+_DNF5_UNITS = {
+    'B': 1,
+    'KiB': 1024,
+    'MiB': 1024**2,
+    'GiB': 1024**3,
+    'TiB': 1024**4,
+    'PiB': 1024**5,
+    'EiB': 1024**6,
+    'ZiB': 1024**7,
+    'YiB': 1024**8,
+}
+
+_DNF5_UNIT_NAMES = '|'.join(_DNF5_UNITS)
+
+# DNF5 autoremove summary, e.g.
+# "After this operation, 299 MiB will be freed (install 0 B, remove 299 MiB)."
+DNF5_AUTOREMOVE_RE = re.compile(
+    r'After this operation, '
+    r'([0-9]+(?:\.[0-9]+)?) '
+    r'(' + _DNF5_UNIT_NAMES + r') '
+    r'will be freed')
+
+# DNF5 "clean all" summary, e.g.
+# "Removed 12 files, 3 directories (total of 25 MiB). 0 errors occurred."
+DNF5_CLEAN_RE = re.compile(
+    r'Removed \d+ files, \d+ directories '
+    r'\(total of ([0-9]+(?:\.[0-9]+)?) '
+    r'(' + _DNF5_UNIT_NAMES + r')\)')
+
+DNF5_CLEAN_ERRORS_RE = re.compile(
+    r'Removed \d+ files, \d+ directories '
+    r'\(total of [0-9]+(?:\.[0-9]+)? '
+    r'(?:' + _DNF5_UNIT_NAMES + r')\)\. '
+    r'([1-9]\d*) errors occurred\.')
 
 
-def parseSize(size):
-    """Parse the size returned by dnf"""
+def parse_size(size):
+    """Parse the size returned when cleaning pacman cache"""
     number, unit = [string.strip() for string in size.split()]
-    return int(float(number)*units[unit])
+    return int(float(number) * units[unit])
 
 
 def dnf_autoremove():
@@ -710,22 +934,324 @@ def dnf_autoremove():
         msg = _(
             "%s cannot be cleaned because it is currently running.  Close it, and try again.") % "Dnf"
         raise RuntimeError(msg)
-    cmd = ['dnf', '-y', 'autoremove']
+    if not FileUtilities.exe_exists(General.resolve_exe('dnf')):
+        raise RuntimeError(_('Executable not found: %s') % 'dnf')
+    cmd = [General.resolve_exe('dnf'), '-y', DNF_EXIT_ON_LOCK, 'autoremove']
     (rc, stdout, stderr) = General.run_external(cmd)
     freed_bytes = 0
     allout = stdout + stderr
     if 'Error: This command has to be run under the root user.' in allout:
-        raise RuntimeError('dnf autoremove >> requires root permissions')
+        raise RuntimeError(
+            # TRANSLATORS: %s is the package manager, such as Yum or Dnf
+            _("%s cannot be cleaned without root permissions.") % "Dnf")
     if rc > 0:
-        raise RuntimeError('dnf raised error %s: %s' % (rc, stderr))
+        raise RuntimeError(f'dnf autoremove raised error {rc}: {stderr}')
 
-    cregex = re.compile("Freed space: ([\d.]+[\s]+[BkMG])")
-    match = cregex.search(allout)
-    if match:
-        freed_bytes = parseSize(match.group(1))
+    freed_bytes = parse_dnf_freed_space(allout) or 0
     logger.debug(
         'dnf_autoremove >> total freed bytes: %s', freed_bytes)
     return freed_bytes
+
+
+def parse_dnf_freed_space(output):
+    """Parse dnf output for the freed-space line and return bytes freed.
+
+    Handles both DNF4 and DNF5:
+
+    DNF4 autoremove ("Freed space: 299 M"):
+    - dnf's format_number() divides by 1024 and uses unit symbols
+      ' ' (bytes), k, M, G, T, P, E, Z, Y.  The byte tier uses a literal
+      space as the symbol, so byte values print with two trailing spaces.
+
+    DNF5 autoremove ("After this operation, 299 MiB will be freed "
+    "(install 0 B, remove 299 MiB).") reports the net installed size of
+    removed RPMs (remove - install).
+
+    DNF5 "clean all" ("Removed 12 files, 3 directories (total of 25 MiB). "
+    "0 errors occurred.") reports the apparent size of deleted cache files.
+
+    DNF5 uses 1024-based binary units (B, KiB, MiB, ...).
+
+    Returns None when no freed-space line is found.
+    """
+    # DNF4 autoremove
+    match = re.search(
+        r"Freed space: (\d+(?:\.\d+)?) ([ kMGTPEZY])", output)
+    if match:
+        return int(float(match.group(1)) * _DNF_UNITS[match.group(2)])
+
+    # DNF5 autoremove
+    match = DNF5_AUTOREMOVE_RE.search(output)
+    if match:
+        return int(float(match.group(1)) * _DNF5_UNITS[match.group(2)])
+
+    # DNF5 clean all
+    match = DNF5_CLEAN_RE.search(output)
+    if match:
+        return int(float(match.group(1)) * _DNF5_UNITS[match.group(2)])
+
+    return None
+
+
+def pacman_cache():
+    """Clean cache in pacman"""
+    if os.path.exists('/var/lib/pacman/db.lck'):
+        msg = _(
+            "%s cannot be cleaned because it is currently running.  Close it, and try again.") % "pacman"
+        raise RuntimeError(msg)
+    paccache = General.resolve_exe('paccache')
+    if not exe_exists(paccache):
+        raise RuntimeError('paccache not found')
+    cmd = [paccache, '-rk0']
+    (rc, stdout, stderr) = General.run_external(cmd)
+    if rc > 0:
+        raise RuntimeError(f'paccache raised error {rc}: {stderr}')
+    # parse line like this: "==> finished: 3 packages removed (42.31 MiB freed)"
+    cregex = re.compile(
+        r"==> finished: ([\d.]+) packages removed \(([\d.]+\s+(?:[KMGT]iB|[BkMG])) freed\)")
+    match = cregex.search(stdout)
+    if match:
+        return parse_size(match.group(2))
+    return 0
+
+
+def snap_parse_list(stdout):
+    """Parse output of `snap list --all`"""
+    disabled_snaps = []
+    lines = stdout.strip().split('\n')
+    if not lines:
+        return disabled_snaps
+    # Example output: "No snaps are installed yet. Try 'snap install hello-world'."
+    raw_header = lines[0]
+    header = raw_header.lower()
+    if 'no snaps' in header and 'install' in header:
+        return disabled_snaps
+    if "name" not in header or "rev" not in header or "notes" not in header:
+        logger.warning(
+            "Unexpected 'snap list --all' output; returning 0. First line: %r", raw_header)
+        return disabled_snaps
+    for line in lines[1:]:  # Skip header line
+        parts = line.split()
+        if len(parts) >= 4 and 'disabled' in line:
+            snapname = parts[0]
+            revision = parts[2]
+            disabled_snaps.append((snapname, revision))
+    return disabled_snaps
+
+
+def snapd_is_active():
+    """Return True if snap is installed and snapd is active.
+
+    The result is cached in a module-level variable to avoid repeated
+    systemctl calls during a single BleachBit run.
+    """
+    def check_snapd():
+        if not exe_exists(General.resolve_exe('snap')):
+            return False
+        if not exe_exists(General.resolve_exe('systemctl')):
+            return False
+        # When snap is installed but snapd is inactive, then `snap list --all`
+        # or `snap version` may have a long delay, so we check the service status first
+        try:
+            (rc, _stdout, _stderr) = General.run_external(
+                [General.resolve_exe('systemctl'), 'is-active',
+                 '--quiet', 'snapd.socket'],
+                timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                'systemctl is-active snapd.socket timed out: it seems snap is installed but snapd is inactive')
+            return False
+        except (FileNotFoundError, OSError) as exc:
+            logger.warning('systemctl is-active snapd.socket failed: %s', exc)
+            return False
+        return rc == 0
+
+    global _snapd_is_active_cache  # pylint: disable=global-statement
+    if _snapd_is_active_cache is None:
+        _snapd_is_active_cache = check_snapd()
+    return _snapd_is_active_cache
+
+
+def clear_snapd_cache():
+    """Clear the snapd_is_active() cache."""
+    global _snapd_is_active_cache  # pylint: disable=global-statement
+    _snapd_is_active_cache = None
+
+
+def snap_disabled_full(really_delete):
+    """Remove disabled snaps"""
+    assert isinstance(really_delete, bool)
+    if not snapd_is_active():
+        raise RuntimeError('snap not found or snapd is not active')
+
+    # Get list of all snaps.
+    cmd = [General.resolve_exe('snap'), 'list', '--all']
+    try:
+        (rc, stdout, stderr) = General.run_external(
+            cmd, clean_env=True, timeout=15)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            'snap list --all timed out after 15 seconds; is snapd running?') from exc
+    if rc > 0:
+        raise RuntimeError(f'snap list raised error {rc}: {stderr}')
+
+    # Parse output to find disabled snaps.
+    disabled_snaps = snap_parse_list(stdout)
+    if not disabled_snaps:
+        return 0
+
+    # Remove disabled snaps.
+    total_freed = 0
+    for snapname, revision in disabled_snaps:
+        # `snap info` returns info only about active snaps.
+        # Instead, get size from the snap file directly.
+        snap_file = f'/var/lib/snapd/snaps/{snapname}_{revision}.snap'
+        try:
+            snap_size = os.path.getsize(snap_file)
+            logger.debug('Found snap file: %s, size: %s',
+                         snap_file, f"{snap_size:,}")
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                logger.warning('Could not find snap file: %s', snap_file)
+            else:
+                logger.warning('Could not measure snap file %s: %s',
+                               snap_file, e)
+            snap_size = 0
+
+        # Remove the snap revision
+        if really_delete:
+            # Consider there may be a slow system with a large snap.
+            remove_cmd = [General.resolve_exe('snap'), 'remove',
+                          snapname, f'--revision={revision}']
+            try:
+                (rc, _, remove_stderr) = General.run_external(
+                    remove_cmd, clean_env=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                logger.error(
+                    'Timeout removing snap %s revision %s', snapname, revision)
+                break
+            if rc > 0:
+                logger.error(
+                    'Failed to remove snap %s revision %s: %s', snapname, revision, remove_stderr)
+                break
+            total_freed += snap_size
+            logger.debug(
+                'Removed snap %s revision %s, freed %s bytes', snapname, revision, snap_size)
+        else:
+            total_freed += snap_size
+
+    return total_freed
+
+
+def snap_disabled_clean():
+    """Remove disabled snaps"""
+    return snap_disabled_full(True)
+
+
+def snap_disabled_preview():
+    """Preview snaps that would be removed"""
+    return snap_disabled_full(False)
+
+
+def is_unix_display_protocol_wayland():
+    """Return True if the display protocol is Wayland."""
+    assert IS_POSIX
+    if 'XDG_SESSION_TYPE' in os.environ:
+        # If not wayland, then x11, mir, etc.
+        return os.environ['XDG_SESSION_TYPE'] == 'wayland'
+    if 'WAYLAND_DISPLAY' in os.environ:
+        return True
+    # Ubuntu 24.10 showed "ubuntu-xorg".
+    # openSUSE Tumbleweed and Fedora 41 showed "gnome".
+    # Fedora 41 also showed "plasma".
+    if os.environ.get('DESKTOP_SESSION') in ('ubuntu-xorg', 'gnome', 'plasma'):
+        return False
+    # Wayland (Ubuntu 23.10) sets DISPLAY=:0 like x11, so do not check DISPLAY.
+    try:
+        (rc, stdout, _stderr) = General.run_external(
+            [General.resolve_exe('loginctl')])
+    except FileNotFoundError:
+        return False
+    if rc != 0:
+        logger.warning('logintctl returned rc %s', rc)
+        return False
+    try:
+        session = stdout.split('\n')[1].strip().split(' ')[0]
+    except (IndexError, ValueError):
+        logger.warning('unexpected output from loginctl: %s', stdout)
+        return False
+    if not session.isdigit():
+        logger.warning('unexpected session loginctl: %s', session)
+        return False
+    result = General.run_external(
+        [General.resolve_exe('loginctl'), 'show-session', session, '-p', 'Type'])
+    return 'wayland' in result[1].lower()
+
+
+def root_is_not_allowed_to_X_session():
+    """Return True if root is not allowed to X session.
+
+    This function is called only with root on Wayland.
+    """
+    assert IS_POSIX
+    try:
+        result = General.run_external(
+            [General.resolve_exe('xhost')], clean_env=False)
+        xhost_returned_error = result[0] == 1
+        return xhost_returned_error
+    except (FileNotFoundError, OSError) as exc:
+        logger.debug(
+            'xhost check failed (%s); assuming root is not allowed to X session', exc)
+        return True
+
+
+def is_display_protocol_wayland_and_root_not_allowed():
+    """Return True if the display protocol is Wayland and root is not allowed to X session"""
+    try:
+        is_wayland = bleachbit.Unix.is_unix_display_protocol_wayland()
+    except Exception as e:
+        logger.exception(e)
+        return False
+    return (
+        is_wayland and
+        os.environ.get('USER') == 'root' and
+        bleachbit.Unix.root_is_not_allowed_to_X_session()
+    )
+
+
+def _dns_flush_command():
+    """Return the command to flush the DNS resolver cache, or None if there is none"""
+    for exe, arg in (('resolvectl', 'flush-caches'),
+                     ('systemd-resolve', '--flush-caches')):
+        path = General.resolve_exe(exe)
+        if exe_exists(path):
+            return [path, arg]
+    return None
+
+
+def can_flush_dns():
+    """Return whether the DNS resolver cache can be flushed"""
+    return _dns_flush_command() is not None
+
+
+def flush_dns():
+    """Flush the DNS resolver cache
+
+    Returns 0 on success.
+    Raises RuntimeError on failure.
+    """
+    args = _dns_flush_command()
+    if args is None:
+        raise RuntimeError('Neither resolvectl nor systemd-resolve found')
+    (rc, stdout, stderr) = General.run_external(args)
+    if 0 != rc:
+        # If service is not found, then there may be nothing to flush.
+        if 'Unit dbus-org.freedesktop.resolve1.service not found' in stderr:
+            logger.warning(stderr)
+            return 0
+        raise RuntimeError(
+            f'Command: {args}\nReturn code: {rc}\nStdout: {stdout}\nStderr: {stderr}')
+    return 0
 
 
 locales = Locales()

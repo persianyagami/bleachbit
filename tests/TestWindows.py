@@ -1,139 +1,432 @@
-# vim: ts=4:sw=4:expandtab
-# -*- coding: UTF-8 -*-
-
-# BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
-# https://www.bleachbit.org
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
 
 """
 Test case for module Windows
 """
 
-from tests import common
+# These tests reach into internals on purpose.
+# pylint: disable=protected-access
 
-from bleachbit.FileUtilities import extended_path, extended_path_undo
-from bleachbit.Windows import *
-from bleachbit import logger
 
-import functools
+# standard imports
+import ctypes
+import errno
+import itertools
 import os
 import platform
 import shutil
-import sys
+import subprocess
 import tempfile
-import unittest
+import time
 from decimal import Decimal
+from pathlib import Path
+from unittest import mock
+from random import randint
 
-if 'win32' == sys.platform:
+from tests.common import pytest
+
+# first party imports
+from tests import common
+
+import bleachbit
+from bleachbit import FileUtilities, General
+from bleachbit.Command import Delete, Function
+from bleachbit.FileUtilities import extended_path, extended_path_undo
+from bleachbit.Windows import (
+    cleanup_nonce,
+    clear_clipboard,
+    delete_locked_file,
+    delete_registry_key,
+    delete_registry_value,
+    delete_updates,
+    get_running_dependent_services,
+    is_service_running,
+    run_net_service_command,
+    detect_registry_key,
+    empty_recycle_bin,
+    flush_dns,
+    get_clipboard_paths,
+    get_fixed_drives,
+    get_font_conf_file,
+    get_known_folder_path,
+    get_recycle_bin,
+    get_recycle_bin_metadata,
+    get_windows_system_paths,
+    get_windows_version,
+    elevate_privileges,
+    fix_appdata_acl,
+    has_broken_appdata_acl,
+    has_fontconfig_cache,
+    is_junction,
+    move_to_recycle_bin,
+    parse_windows_build,
+    path_on_network,
+    set_environ,
+    setup_environment,
+    shell_change_notify,
+    split_registry_key,
+    read_registry_key,
+    get_sid_token_48,
+    is_ots_elevation,
+    _add_command_line_parameters,
+    get_splash_screen_delay_seconds,
+    expand_windows_system_vars,
+    SplashThread,
+)
+from bleachbit import logger
+
+
+class WindowsSystemPathsTestCase(common.BleachbitTestCase):
+    """Test Windows system directory expansion."""
+
+    def test_get_windows_system_paths_32_bit_os(self):
+        """Unit test get_windows_system_paths() for 32-bit Windows."""
+        env = {
+            'WinDir': r'C:\Windows',
+            'PROCESSOR_ARCHITECTURE': 'x86',
+        }
+        self.assertEqual(
+            [r'C:\Windows\System32'],
+            get_windows_system_paths(env, process_bits=32))
+
+    def test_get_windows_system_paths_64_bit_process(self):
+        """Unit test get_windows_system_paths() for 64-bit Python."""
+        env = {
+            'WinDir': r'C:\Windows',
+            'PROCESSOR_ARCHITECTURE': 'AMD64',
+        }
+        self.assertEqual(
+            [r'C:\Windows\System32', r'C:\Windows\SysWOW64'],
+            get_windows_system_paths(env, process_bits=64))
+
+    def test_get_windows_system_paths_wow64_process(self):
+        """Unit test get_windows_system_paths() for 32-bit Python on 64-bit Windows."""
+        env = {
+            'WinDir': r'C:\Windows',
+            'PROCESSOR_ARCHITECTURE': 'x86',
+            'PROCESSOR_ARCHITEW6432': 'AMD64',
+        }
+        self.assertEqual(
+            [r'C:\Windows\Sysnative', r'C:\Windows\SysWOW64'],
+            get_windows_system_paths(env, process_bits=32))
+
+    def test_get_windows_system_paths(self):
+        """Test get_windows_system_paths() in general"""
+        # Test with default environment
+        ret = get_windows_system_paths()
+        self.assertIsInstance(ret, list)
+        for path in ret:
+            self.assertTrue(os.path.isabs(path))
+            self.assertExists(path)
+
+    def test_expand_windows_system_vars(self):
+        """Unit test expand_windows_system_vars()."""
+        path_arg = r'%WindowsSystem%\LogFiles\*.log'
+        # Without providing system paths
+        paths = expand_windows_system_vars(path_arg)
+        self.assertIsInstance(paths, list)
+        # On 32-bit OS, it returns one. On 64-bit OS, it returns
+        # 2 (regardless of bitness of the process).
+        self.assertIn(len(paths), (1, 2))
+        # Provide system paths
+        paths = expand_windows_system_vars(
+            path_arg,
+            [r'C:\Windows\Sysnative', r'C:\Windows\SysWOW64'])
+        self.assertEqual(
+            [r'C:\Windows\Sysnative\LogFiles\*.log',
+             r'C:\Windows\SysWOW64\LogFiles\*.log'],
+            paths)
+
+
+class WindowsNonceTestCase(common.BleachbitTestCase):
+    """Test cleanup_nonce()"""
+
+    def test_cleanup_nonce_keeps_recent(self):
+        """cleanup_nonce() keeps a nonce file the session bus may still use"""
+        self.write_file('gdbus-nonce-file-LIVE01', b'nonce')
+        stale = self.write_file('gdbus-nonce-file-OLD001', b'nonce')
+        old = time.time() - 8 * 24 * 60 * 60
+        os.utime(stale, (old, old))
+        tempdir = self.tempdir
+        real_expandvars = os.path.expandvars
+
+        def expandvars(path):
+            return real_expandvars(path.replace('%TEMP%\\', tempdir + os.sep))
+
+        mock_delete = mock.Mock()
+        with common.set_temporary_env('BLEACHBIT_TEST_OPTIONS_DIR', None), \
+                mock.patch('os.path.expandvars', expandvars), \
+                mock.patch.object(FileUtilities, 'delete', mock_delete):
+            cleanup_nonce()
+        mock_delete.assert_called_once_with(stale)
+
+
+if bleachbit.IS_WINDOWS:
+    import pywintypes
+    import win32api
+    import win32con
+    import win32gui
+    import win32service
     import winreg
-    from win32com.shell import shell
+    from win32com.shell import shell, shellcon
+
+    # pylint: disable-next=ungrouped-imports
+    from bleachbit import Windows
+else:
+    # WindowsError is a builtin only on Windows
+    # pylint: disable-next=redefined-builtin
+    from bleachbit.General import WindowsError
 
 
-def put_files_into_recycle_bin():
+def put_objects_into_recycle_bin():
     """Put a file and a folder into the recycle bin"""
+    count = 0
     # make a file and move it to the recycle bin
-    tests = ('regular', 'unicode-emdash-u\u2014', 'long' + 'x' * 100)
+    tests = ['regular', 'unicode-emdash-u\u2014',
+             'long' + 'x' * 100] + common.SPECIAL_TEST_STRINGS
     for test in tests:
-        (fd, filename) = tempfile.mkstemp(
-            prefix='bleachbit-recycle-file', suffix=test)
-        os.close(fd)
+        with tempfile.NamedTemporaryFile(
+                prefix='bleachbit-recycle-file', suffix=test, delete=False) as f:
+            filename = f.name
+            # Write enough data to exceed the MFT resident threshold.
+            f.write(b'x' * (1024 * 32))
         move_to_recycle_bin(filename)
+        count += 1
     # make a folder and move it to the recycle bin
     dirname = tempfile.mkdtemp(prefix='bleachbit-recycle-folder')
     common.touch_file(os.path.join(dirname, 'file'))
     move_to_recycle_bin(dirname)
+    count += 1
+    return count
 
 
-@unittest.skipUnless('win32' == sys.platform, 'not running on windows')
-class WindowsTestCase(common.BleachbitTestCase):
+class WindowsLinksMixIn():
+    """Mixin class for Windows link creation methods."""
+
+    def _create_win_dir_symlink(self, target, linkname):
+        """Create a directory symlink"""
+
+        self.assertFalse(os.path.lexists(linkname),
+                         f'Link must not exist: {linkname}')
+        self.assertTrue(os.path.isabs(target),
+                        f'Target must be absolute path: {target}')
+        self.assertTrue(os.path.isabs(linkname),
+                        f'Link must be absolute path: {linkname}')
+        self.assertExists(target)
+        target_path = Path(target)
+        self.assertTrue(target_path.is_dir(),
+                        f'Target must be an existing directory: {target}')
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateSymbolicLinkW.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+        ]
+        kernel32.CreateSymbolicLinkW.restype = ctypes.c_ubyte
+        result = kernel32.CreateSymbolicLinkW(
+            linkname, target, 1)  # SYMBOLIC_LINK_FLAG_DIRECTORY
+        if result == 0:
+            err = ctypes.GetLastError()
+            raise OSError(err, ctypes.FormatError(err))
+        self.assertExists(linkname)
+        link_path = Path(linkname)
+        self.assertTrue(link_path.is_symlink())
+        self.assertTrue(link_path.is_dir())
+        # pylint: disable-next=possibly-used-before-assignment
+        self.assertFalse(Windows.is_junction(linkname))
+        self.assertFalse(FileUtilities.is_normal_directory(linkname))
+
+    def _create_win_file_symlink(self, target, linkname):
+        """Create a file symlink"""
+
+        self.assertFalse(os.path.lexists(linkname),
+                         f'Link must not exist: {linkname}')
+        self.assertTrue(os.path.isabs(target),
+                        f'Target must be absolute path: {target}')
+        self.assertTrue(os.path.isabs(linkname),
+                        f'Link must be absolute path: {linkname}')
+        self.assertExists(target)
+        target_path = Path(target)
+        self.assertTrue(target_path.is_file(),
+                        f'Target must be an existing file: {target}')
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateSymbolicLinkW.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+        ]
+        kernel32.CreateSymbolicLinkW.restype = ctypes.c_ubyte
+        result = kernel32.CreateSymbolicLinkW(
+            linkname, target, 0)  # SYMBOLIC_LINK_FLAG_FILE
+        if result == 0:
+            err = ctypes.GetLastError()
+            raise OSError(err, ctypes.FormatError(err))
+        self.assertExists(linkname)
+        link_path = Path(linkname)
+        self.assertTrue(link_path.is_symlink())
+        self.assertTrue(link_path.is_file())
+
+    def _create_win_hard_link(self, target, linkname):
+        """Create a hard link to a file"""
+
+        self.assertFalse(os.path.lexists(linkname),
+                         f'Link must not exist: {linkname}')
+        self.assertTrue(os.path.isabs(target),
+                        f'Target must be absolute path: {target}')
+        self.assertTrue(os.path.isabs(linkname),
+                        f'Link must be absolute path: {linkname}')
+        self.assertExists(target)
+        target_path = Path(target)
+        self.assertTrue(target_path.is_file(),
+                        f'Target must be an existing file: {target}')
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateHardLinkW.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_void_p,
+        ]
+        kernel32.CreateHardLinkW.restype = ctypes.c_bool
+        result = kernel32.CreateHardLinkW(linkname, target, None)
+        if not result:
+            err = ctypes.GetLastError()
+            raise OSError(err, ctypes.FormatError(err))
+        self.assertExists(linkname)
+        link_path = Path(linkname)
+        self.assertTrue(link_path.is_file())
+        self.assertFalse(link_path.is_symlink())
+        self.assertFalse(Windows.is_junction(linkname))
+        self.assertTrue(os.path.samefile(target, linkname))
+        self.assertFalse(FileUtilities.is_normal_directory(linkname))
+
+    def _create_win_junction(self, target, linkname):
+        """Create a directory junction using mklink /J."""
+
+        if os.path.lexists(linkname):
+            raise OSError(f'Link already exists: {linkname}')
+        self.assertTrue(os.path.isabs(target),
+                        f'Target must be absolute path: {target}')
+        self.assertTrue(os.path.isabs(linkname),
+                        f'Link must be absolute path: {linkname}')
+        self.assertExists(target)
+        target_path = Path(target)
+        self.assertTrue(target_path.is_dir(),
+                        f'Target must be an existing directory: {target}')
+        cmd = ['cmd', '/c', 'mklink', '/J',
+               extended_path(linkname), extended_path(target)]
+        subprocess.check_call(cmd)
+        self.assertExists(linkname)
+        self.assertTrue(Windows.is_junction(linkname))
+        path = Path(linkname)
+        self.assertTrue(path.is_dir())
+        self.assertTrue(path.is_junction())
+
+
+@common.skipUnlessWindows
+class WindowsTestCase(common.BleachbitTestCase, WindowsLinksMixIn):
 
     """Test case for module Windows"""
 
     def skipUnlessAdmin(self):
+        # pylint: disable-next=possibly-used-before-assignment
         if not shell.IsUserAnAdmin():
             self.skipTest('requires administrator privileges')
 
+    def test_flush_dns_uses_absolute_path(self):
+        """flush_dns runs an absolute ipconfig path, not a bare name"""
+        with mock.patch('bleachbit.General.run_external',
+                        return_value=(0, '', '')) as mock_run:
+            flush_dns()
+        args = mock_run.call_args[0][0]
+        self.assertTrue(os.path.isabs(args[0]), args[0])
+        self.assertTrue(args[0].lower().endswith('ipconfig.exe'), args[0])
+        self.assertEqual(args[1], '/flushdns')
+
+    @pytest.mark.xdist_group('recycle-bin')
     def test_get_recycle_bin(self):
         """Unit test for get_recycle_bin"""
         for f in get_recycle_bin():
-            self.assertExists(extended_path(f))
-        if not common.destructive_tests('get_recycle_bin'):
-            return
-        put_files_into_recycle_bin()
+            self.assertLExists(extended_path(f))
+
+    def test_get_recycle_bin_metadata(self):
+        """Only top-level recycled payloads have associated restore records."""
+        payload = r'C:\$Recycle.Bin\S-1-5-21-1\$RABCDEF.txt'
+        metadata = r'C:\$Recycle.Bin\S-1-5-21-1\$IABCDEF.txt'
+        for path in (payload, payload.swapcase(), extended_path(payload)):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    os.path.normcase(metadata),
+                    os.path.normcase(get_recycle_bin_metadata(path)))
+        for path in (r'C:\Users\me\$RABCDEF.txt', payload + r'\child',
+                     r'C:\Users\me\$Recycle.Bin\S-1-5-21-1\$RABCDEF.txt',
+                     r'C:\$Recycle.Bin\S-1-5-21-1\$RROOT\sub\$RABCDEF.txt',
+                     metadata, '$RABCDEF.txt'):
+            with self.subTest(path=path):
+                self.assertIsNone(get_recycle_bin_metadata(path))
+
+    @pytest.mark.no_xdist
+    @pytest.mark.xdist_group('recycle-bin')
+    @common.skipUnlessDestructive
+    def test_get_recycle_bin_destructive(self):
+        """Unit test the destructive part of get_recycle_bin"""
+        added_count = put_objects_into_recycle_bin()
         # clear recycle bin
         counter = 0
         for f in get_recycle_bin():
             counter += 1
             FileUtilities.delete(f)
-        self.assertGreaterEqual(counter, 3, 'deleted %d' % counter)
+        self.assertGreaterEqual(counter, added_count, 'deleted %d' % counter)
         # now it should be empty
-        for f in get_recycle_bin():
+        for _f in get_recycle_bin():
             self.fail('recycle bin should be empty, but it is not')
 
-    def _test_link_helper(self, mklink_option, clear_recycle_bin):
-        """Helper function for testing for links with is_junction() and
-        get_recycle_bin()
+    def _test_link_helper(self, mklink_option, recycle_container, clear_recycle_bin):
+        """Helper function for testing directory junctions and symlinks in the recycle bin.
 
-        It gets called four times for the combinations of the two
-        parameters. It's called by four unit tests four accounting
-        purposes. In other words, we don't want to count a test as
-        skipped if part of it succeeded.
+        Tests that get_recycle_bin() correctly handles Windows directory links
+        when they are placed in the recycle bin, and verifies that the original
+        target directory and its contents are preserved after clearing the bin.
 
-        mklink /j = directory junction
-        directory junction does not require administrator privileges
+        Args:
+            mklink_option: Link type to create. '/j' for directory junction,
+                '/d' for directory symbolic link.
+            recycle_container: If True, move the container directory to the
+                recycle bin. If False, move only the link itself.
+            clear_recycle_bin: If True, clear the recycle bin after moving
+                the link. If False, manually delete items from get_recycle_bin().
 
-        mklink /d=directory symbolic link
-        requires administrator privileges
+        Note:
+            Directory symbolic links (/d) require administrator privileges.
         """
+        assert mklink_option in ('/j', '/d')
         if mklink_option == '/d':
             self.skipUnlessAdmin()
         # make a normal directory with a file in it
-        target_dir = os.path.join(self.tempdir, 'target_dir')
-        os.mkdir(target_dir)
-        self.assertExists(target_dir)
-        self.assertFalse(is_junction(target_dir))
+        target_dir = self.mkdir('target_dir')
 
-        from random import randint
-        canary_fn = os.path.join(target_dir, 'do_not_delete%d' % randint(1000,9999))
+        canary_base = f'do_not_delete{randint(10000, 9999999)}'
+        canary_fn = os.path.join(target_dir, canary_base)
         common.touch_file(canary_fn)
-        self.assertExists(canary_fn)
         self.assertFalse(is_junction(canary_fn))
 
         # make a normal directory to hold a link
-        container_dir = os.path.join(self.tempdir, 'container_dir')
-        os.mkdir(container_dir)
-        self.assertExists(container_dir)
-        self.assertFalse(is_junction(container_dir))
+        container_dir = self.mkdir('container_dir')
 
         # create the link
         link_pathname = os.path.join(container_dir, 'link')
-        args = ('cmd', '/c', 'mklink', mklink_option, link_pathname, target_dir)
-        from bleachbit.General import run_external
-        (rc, stdout, stderr) = run_external(args)
-        self.assertEqual(rc, 0, stderr)
-        self.assertExists(link_pathname)
-        self.assertTrue(is_junction(link_pathname))
+        if mklink_option == '/j':
+            self._create_win_junction(target_dir, link_pathname)
+        else:
+            self._create_win_dir_symlink(target_dir, link_pathname)
 
         # put the link in the recycle bin
-        move_to_recycle_bin(container_dir)
-
-        # preview the recycle bin
-        for f in get_recycle_bin():
-            print(f)
+        move_to_recycle_bin(
+            container_dir if recycle_container else link_pathname)
 
         def cleanup_dirs():
             shutil.rmtree(container_dir, True)
@@ -142,12 +435,12 @@ class WindowsTestCase(common.BleachbitTestCase):
 
         if not clear_recycle_bin:
             cleanup_dirs()
-            if not common.destructive_tests('windows link'):
-                self.skipTest('destructive tests are disabled')
             return
 
         # clear the recycle bin
         for f in get_recycle_bin():
+            if canary_base in f:
+                logger.error('get_recycle_bin() returned canary: %s', f)
             FileUtilities.delete(f, shred=False)
 
         # verify the canary is still there
@@ -156,48 +449,416 @@ class WindowsTestCase(common.BleachbitTestCase):
         # clean up
         cleanup_dirs()
 
-    @unittest.skip("not yet")
-    def test_link_junction_no_clear(self):
-        """Unit test for directory junctions without clearing recycle bin"""
-        self._test_link_helper('/j', False)
+    @pytest.mark.xdist_group('recycle-bin')
+    def test_link_types(self):
+        """Unit test for directory junctions and symlinks with recycle bin"""
+        for mklink_option, recycle_container, clear_recycle_bin in itertools.product(
+            ('/j', '/d'), (False, True), (False, True)
+        ):
+            with self.subTest(mklink_option=mklink_option,
+                              recycle_container=recycle_container,
+                              clear_recycle_bin=clear_recycle_bin):
+                self._test_link_helper(
+                    mklink_option, recycle_container, clear_recycle_bin)
 
-    @unittest.skip("not yet")
-    def test_link_junction_clear(self):
-        """Unit test for directory junctions with clearing recycle bin"""
-        self._test_link_helper('/j', True)
+    def _test_broken_link_in_recycle_bin(self, mklink_option, recycle_container,
+                                         break_before_recycle):
+        """Helpful function to test broken directory junctions and symlinks
+        in the recycle bin.
 
-    def test_link_symlink_no_clear(self):
-        """Unit test for directory symlink without clearing recycle bin"""
-        self._test_link_helper('/d', False)
+        When a broken link (target deleted) is in the recycle bin, deleting it
+        should delete the link itself, not attempt to follow or restore the
+        target.
 
-    def test_link_symlink_clear(self):
-        """Unit test for directory symlink with clearing recycle bin"""
-        self._test_link_helper('/d', True)
+        Args:
+            mklink_option: Link type to create. '/j' for directory junction,
+                '/d' for directory symbolic link.
+            recycle_container: If True, move the container directory to the
+                recycle bin. If False, move only the link itself.
+            break_before_recycle: If True, delete the target before moving
+                the link to the recycle bin. If False, recycle first and then
+                delete the target.
+        """
+        assert mklink_option in ('/j', '/d')
+        if mklink_option == '/d':
+            self.skipUnlessAdmin()
+
+        before = set(get_recycle_bin())
+        target_dir = self.mkdir('target_dir')
+        canary_fn = os.path.join(
+            target_dir, f'canary{randint(10000, 9999999)}')
+        common.touch_file(canary_fn)
+
+        container_dir = self.mkdir('container_dir')
+        link_pathname = os.path.join(container_dir, 'link')
+        if mklink_option == '/j':
+            self._create_win_junction(target_dir, link_pathname)
+        else:
+            self._create_win_dir_symlink(target_dir, link_pathname)
+
+        self.assertTrue(os.path.lexists(link_pathname))
+        self.assertExists(canary_fn)
+
+        if break_before_recycle:
+            shutil.rmtree(target_dir)
+            self.assertTrue(os.path.lexists(link_pathname))
+            self.assertFalse(os.path.exists(link_pathname))
+
+        move_to_recycle_bin(
+            container_dir if recycle_container else link_pathname)
+
+        if not break_before_recycle:
+            shutil.rmtree(target_dir)
+            if not recycle_container:
+                shutil.rmtree(container_dir)
+
+        try:
+            added = [p for p in get_recycle_bin() if p not in before]
+            self.assertTrue(
+                added, 'recycle bin should contain recycled link')
+
+            broken = []
+            for f in added:
+                ep = extended_path(f)
+                self.assertLExists(ep)
+                if ((os.path.islink(ep) or is_junction(ep)) and
+                        not os.path.exists(ep)):
+                    broken.append(f)
+            self.assertTrue(
+                broken, 'expected broken link (lexists, not exists)')
+
+            for f in added:
+                ep = extended_path(f)
+                self.assertTrue(FileUtilities.delete(ep, shred=False))
+                self.assertNotLExists(ep)
+
+            self.assertFalse(os.path.lexists(link_pathname))
+            self.assertFalse(os.path.lexists(target_dir))
+            if recycle_container or not break_before_recycle:
+                self.assertFalse(os.path.lexists(container_dir))
+            else:
+                self.assertTrue(os.path.lexists(container_dir))
+        finally:
+            empty_recycle_bin(None, True)
+            if os.path.lexists(container_dir):
+                shutil.rmtree(container_dir, True)
+            if os.path.lexists(target_dir):
+                shutil.rmtree(target_dir, True)
+
+    def _test_broken_link_delete(self, mklink_option, shred):
+        """Helper function to test FileUtilities.delete() on a broken
+        link outside the recycle bin.
+
+        - Tests both junctions and directory symlinks.
+        - Test is Windows only.
+        - Target is a directory (not a file).
+        - Target is broken (does not exist).
+        - Tests both shredding and unlink.
+        - Does not invoke the recycle bin.
+        """
+        assert mklink_option in ('/j', '/d')
+        if mklink_option == '/d':
+            self.skipUnlessAdmin()
+
+        target_dir = self.mkdir('broken_link_delete_target')
+        container_dir = self.mkdir('broken_link_delete_container')
+        link_pathname = os.path.join(container_dir, 'link')
+        if mklink_option == '/j':
+            self._create_win_junction(target_dir, link_pathname)
+        else:
+            self._create_win_dir_symlink(target_dir, link_pathname)
+        shutil.rmtree(target_dir)
+        self.assertLExists(link_pathname)
+        self.assertFalse(os.path.exists(link_pathname))
+        self.assertTrue(FileUtilities.delete(link_pathname, shred=shred))
+        self.assertNotLExists(link_pathname)
+        FileUtilities.close_delete_parent_lock()
+        shutil.rmtree(container_dir, True)
+
+    @pytest.mark.xdist_group('recycle-bin')
+    def test_broken_link_in_recycle_bin(self):
+        """Unit test for broken directory junctions and symlinks in recycle bin
+
+        - Tests both junctions and directory symlinks.
+        - Target is a directory (not a file).
+        - Target is broken (does not exist).
+        - Tests both container in recycle bin and outside recycle bin.
+        - Tests both break target before and after recycling.
+        - Test is Windows only (of course).
+        """
+        for mklink_option, recycle_container, break_before_recycle in itertools.product(
+            ('/j', '/d'), (False, True), (False, True)
+        ):
+            with self.subTest(mklink_option=mklink_option,
+                              recycle_container=recycle_container,
+                              break_before_recycle=break_before_recycle):
+                self._test_broken_link_in_recycle_bin(
+                    mklink_option, recycle_container, break_before_recycle)
+        for mklink_option, shred in itertools.product(
+            ('/j', '/d'), (False, True)
+        ):
+            with self.subTest(mklink_option=mklink_option, shred=shred,
+                              outside_bin=True):
+                self._test_broken_link_delete(mklink_option, shred)
 
     def test_delete_locked_file(self):
         """Unit test for delete_locked_file"""
         tests = ('regular', 'unicode-emdash-u\u2014', 'long' + 'x' * 100)
         for test in tests:
-            f = tempfile.NamedTemporaryFile(
-                prefix='bleachbit-delete-locked-file', suffix=test,
-                delete=False)
-            pathname = f.name
-            f.close()
-            import time
-            time.sleep(5)  # avoid race condition
-            self.assertExists(pathname)
-            logger.debug('delete_locked_file(%s) ' % pathname)
-            if not shell.IsUserAnAdmin():
-                with self.assertRaises(WindowsError):
-                    delete_locked_file(pathname)
-            else:
-                try:
-                    delete_locked_file(pathname)
-                except WindowsError:
-                    logger.exception(
-                        'delete_locked_file() threw an error, which may be a false positive')
-            self.assertExists(pathname)
-        logger.info('reboot Windows and check the three files are deleted')
+            with self.subTest(suffix=test):
+                pathname = self.mkstemp(suffix=test)
+                self.assertExists(pathname)
+                logger.debug('delete_locked_file(%s) ', pathname)
+                with open(pathname, 'rb'), mock.patch.object(
+                        ctypes.windll.kernel32, 'MoveFileExW',
+                        wraps=ctypes.windll.kernel32.MoveFileExW) as move_file:
+                    with self.assertRaises(PermissionError) as locked:
+                        os.remove(pathname)
+                    self.assertEqual(locked.exception.winerror, 32)
+                    if not shell.IsUserAnAdmin():
+                        # pylint: disable-next=possibly-used-before-assignment
+                        with self.assertRaises(WindowsError) as denied:
+                            delete_locked_file(pathname)
+                        self.assertEqual(denied.exception.errno, errno.EACCES)
+                    else:
+                        delete_locked_file(pathname)
+                    move_file.assert_called_once_with(pathname, None, 4)
+                self.assertExists(pathname)
+
+    def test_delete_locked_file_errors(self):
+        pathname = self.mkstemp()
+        for error_code in (5, 32, 123):
+            with self.subTest(winerror=error_code):
+                error = ctypes.WinError(error_code)
+                with mock.patch.object(
+                        ctypes.windll.kernel32, 'MoveFileExW', return_value=0) as move_file, \
+                        mock.patch('bleachbit.Windows.ctypes.WinError', return_value=error):
+                    with self.assertRaises(OSError) as caught:
+                        delete_locked_file(pathname)
+                move_file.assert_called_once_with(pathname, None, 4)
+                if isinstance(error, PermissionError):
+                    self.assertEqual(caught.exception.errno, errno.EACCES)
+                    self.assertEqual(caught.exception.filename, pathname)
+                    self.assertIs(caught.exception.__cause__, error)
+                else:
+                    self.assertIs(caught.exception, error)
+                self.assertExists(pathname)
+
+    def test_delete_locked_file_missing(self):
+        pathname = self.mkstemp()
+        os.remove(pathname)
+        with mock.patch.object(ctypes.windll.kernel32, 'MoveFileExW') as move_file:
+            delete_locked_file(pathname)
+        move_file.assert_not_called()
+
+    # FileAttributeTagInfo of a plain directory
+    _DIRECTORY_TAG_INFO = {'FileAttributes': 0x10, 'ReparseTag': 0}
+
+    def test_delete_parent_lock_needed(self):
+        old_admin = Windows._delete_parent_lock_admin
+        try:
+            with mock.patch('bleachbit.Windows.shell.IsUserAnAdmin', return_value=False):
+                Windows._delete_parent_lock_admin = None
+                self.assertFalse(Windows._delete_parent_lock_needed(
+                    r'C:\Windows\Temp\bleachbit-test-file'))
+
+            with mock.patch('bleachbit.Windows.shell.IsUserAnAdmin', return_value=True):
+                Windows._delete_parent_lock_admin = None
+                with mock.patch.dict(os.environ, {'USERPROFILE': r'C:\Users\bleachbit'}):
+                    self.assertFalse(Windows._delete_parent_lock_needed(
+                        r'C:\Users\bleachbit\AppData\Local\Temp\bleachbit-test-file'))
+                    self.assertTrue(Windows._delete_parent_lock_needed(
+                        r'C:\Windows\Temp\bleachbit-test-file'))
+        finally:
+            Windows._delete_parent_lock_admin = old_admin
+
+    def test_delete_with_parent_lock_reuses_handle(self):
+        Windows._delete_parent_lock_handle = None
+        Windows._delete_parent_lock_key = None
+        handle = mock.sentinel.handle
+        delete_func = mock.Mock(return_value=mock.sentinel.deleted)
+        with mock.patch('bleachbit.Windows._delete_parent_lock_needed', return_value=True), \
+                mock.patch('bleachbit.Windows._delete_parent_directory', return_value=r'\\?\C:\Windows\Temp'), \
+                mock.patch('bleachbit.Windows.win32file.CreateFile', return_value=handle) as create_file, \
+                mock.patch('bleachbit.Windows.win32file.GetFileInformationByHandleEx',
+                           return_value=self._DIRECTORY_TAG_INFO) as get_info, \
+                mock.patch('bleachbit.Windows.win32file.CloseHandle') as close_handle:
+            self.assertEqual(Windows.with_parent_lock(
+                r'C:\Windows\Temp\one.tmp', delete_func, r'C:\Windows\Temp\one.tmp'), mock.sentinel.deleted)
+            self.assertEqual(Windows.with_parent_lock(
+                r'C:\Windows\Temp\two.tmp', delete_func, r'C:\Windows\Temp\two.tmp'), mock.sentinel.deleted)
+            self.assertEqual(create_file.call_count, 1)
+            # The reused handle is checked again
+            self.assertEqual(get_info.call_count, 2)
+            self.assertEqual(delete_func.call_count, 2)
+            Windows._close_delete_parent_lock()
+            close_handle.assert_called_once_with(handle)
+
+    def test_delete_with_parent_lock_closes_handle_on_delete_error(self):
+        Windows._delete_parent_lock_handle = None
+        Windows._delete_parent_lock_key = None
+        handle = mock.sentinel.handle
+        delete_func = mock.Mock(side_effect=RuntimeError('delete failed'))
+        with mock.patch('bleachbit.Windows._delete_parent_lock_needed', return_value=True), \
+                mock.patch('bleachbit.Windows._delete_parent_directory', return_value=r'\\?\C:\Windows\Temp'), \
+                mock.patch('bleachbit.Windows.win32file.CreateFile', return_value=handle), \
+                mock.patch('bleachbit.Windows.win32file.GetFileInformationByHandleEx',
+                           return_value=self._DIRECTORY_TAG_INFO), \
+                mock.patch('bleachbit.Windows.win32file.CloseHandle') as close_handle:
+            with self.assertRaises(RuntimeError):
+                Windows.with_parent_lock(
+                    r'C:\Windows\Temp\one.tmp', delete_func, r'C:\Windows\Temp\one.tmp')
+            close_handle.assert_called_once_with(handle)
+            self.assertIsNone(Windows._delete_parent_lock_handle)
+
+    def test_close_delete_parent_lock_forgets_bad_handle(self):
+        """A handle that fails to close does not make later closes fail"""
+        handle = mock.sentinel.handle
+        Windows._delete_parent_lock_handle = handle
+        Windows._delete_parent_lock_key = r'\\?\c:\windows\temp'
+        # pylint: disable-next=possibly-used-before-assignment
+        error = pywintypes.error(6, 'CloseHandle', 'The handle is invalid.')
+        with mock.patch('bleachbit.Windows.win32file.CloseHandle',
+                        side_effect=error) as close_handle:
+            with self.assertRaises(pywintypes.error):
+                Windows._close_delete_parent_lock()
+            self.assertIsNone(Windows._delete_parent_lock_handle)
+            self.assertIsNone(Windows._delete_parent_lock_key)
+            Windows._close_delete_parent_lock()
+        close_handle.assert_called_once_with(handle)
+
+    def test_lock_delete_parent_rejects_reparse_point(self):
+        """The parent lock uses its handle to refuse a symlink or junction"""
+        Windows._delete_parent_lock_handle = None
+        Windows._delete_parent_lock_key = None
+        handle = mock.sentinel.handle
+        for tag in (0xA0000003, 0xA000000C):  # junction, symlink
+            info = {'FileAttributes': 0x10 | Windows.FILE_ATTRIBUTE_REPARSE_POINT,
+                    'ReparseTag': tag}
+            with self.subTest(tag=hex(tag)), \
+                    mock.patch('bleachbit.Windows._delete_parent_directory', return_value=r'\\?\C:\Windows\Temp'), \
+                    mock.patch('bleachbit.Windows.win32file.CreateFile', return_value=handle), \
+                    mock.patch('bleachbit.Windows.win32file.GetFileInformationByHandleEx',
+                               return_value=info) as get_info, \
+                    mock.patch('bleachbit.Windows.win32file.CloseHandle') as close_handle:
+                with self.assertRaises(OSError):
+                    Windows._lock_delete_parent(r'C:\Windows\Temp\one.tmp')
+                self.assertIs(get_info.call_args.args[0], handle)
+                close_handle.assert_called_once_with(handle)
+                self.assertIsNone(Windows._delete_parent_lock_handle)
+
+    def test_lock_delete_parent_allows_cloud_placeholder(self):
+        """A reparse point that is not a link, like OneDrive's, is locked"""
+        Windows._delete_parent_lock_handle = None
+        Windows._delete_parent_lock_key = None
+        handle = mock.sentinel.handle
+        info = {'FileAttributes': 0x10 | Windows.FILE_ATTRIBUTE_REPARSE_POINT,
+                'ReparseTag': 0x9000601A}
+        with mock.patch('bleachbit.Windows._delete_parent_directory', return_value=r'\\?\D:\OneDrive\Docs'), \
+                mock.patch('bleachbit.Windows.win32file.CreateFile', return_value=handle), \
+                mock.patch('bleachbit.Windows.win32file.GetFileInformationByHandleEx',
+                           return_value=info), \
+                mock.patch('bleachbit.Windows.win32file.CloseHandle') as close_handle:
+            Windows._lock_delete_parent(r'D:\OneDrive\Docs\one.txt')
+            self.assertIs(Windows._delete_parent_lock_handle, handle)
+            Windows._close_delete_parent_lock()
+            close_handle.assert_called_once_with(handle)
+
+    def test_lock_delete_parent_tag_unsupported(self):
+        """Without a tag, any reparse point is refused, other errors raise"""
+        handle = mock.sentinel.handle
+        reparse_dir = 0x10 | Windows.FILE_ATTRIBUTE_REPARSE_POINT
+        for winerror, attrs, expected in ((50, 0x10, 'locked'),
+                                          (50, reparse_dir, 'refused'),
+                                          (5, 0x10, 'error')):
+            Windows._delete_parent_lock_handle = None
+            Windows._delete_parent_lock_key = None
+            # pylint: disable-next=possibly-used-before-assignment
+            error = pywintypes.error(
+                winerror, 'GetFileInformationByHandleEx', 'error')
+            # GetFileInformationByHandle() returns the attributes first
+            basic_info = (attrs,) + (0,) * 9
+            with self.subTest(winerror=winerror, attrs=hex(attrs)), \
+                    mock.patch('bleachbit.Windows._delete_parent_directory', return_value=r'\\?\C:\Windows\Temp'), \
+                    mock.patch('bleachbit.Windows.win32file.CreateFile', return_value=handle), \
+                    mock.patch('bleachbit.Windows.win32file.GetFileInformationByHandleEx',
+                               side_effect=error), \
+                    mock.patch('bleachbit.Windows.win32file.GetFileInformationByHandle',
+                               return_value=basic_info) as get_basic_info, \
+                    mock.patch('bleachbit.Windows.win32file.CloseHandle'):
+                if expected == 'locked':
+                    Windows._lock_delete_parent(r'C:\Windows\Temp\one.tmp')
+                    get_basic_info.assert_called_once_with(handle)
+                    self.assertIs(Windows._delete_parent_lock_handle, handle)
+                    Windows._close_delete_parent_lock()
+                elif expected == 'refused':
+                    with self.assertRaises(OSError) as cm:
+                        Windows._lock_delete_parent(r'C:\Windows\Temp\one.tmp')
+                    self.assertEqual(cm.exception.errno, errno.EACCES)
+                    self.assertIsNone(Windows._delete_parent_lock_handle)
+                else:
+                    with self.assertRaises(pywintypes.error):
+                        Windows._lock_delete_parent(r'C:\Windows\Temp\one.tmp')
+                    get_basic_info.assert_not_called()
+                    self.assertIsNone(Windows._delete_parent_lock_handle)
+
+    def test_lock_delete_parent_blocks_rename(self):
+        """The parent lock takes part in sharing and does not share delete"""
+        Windows._delete_parent_lock_handle = None
+        Windows._delete_parent_lock_key = None
+        handle = mock.sentinel.handle
+        with mock.patch('bleachbit.Windows._delete_parent_directory', return_value=r'\\?\C:\Windows\Temp'), \
+                mock.patch('bleachbit.Windows.win32file.CreateFile', return_value=handle) as create_file, \
+                mock.patch('bleachbit.Windows.win32file.GetFileInformationByHandleEx',
+                           return_value=self._DIRECTORY_TAG_INFO), \
+                mock.patch('bleachbit.Windows.win32file.CloseHandle'):
+            Windows._lock_delete_parent(r'C:\Windows\Temp\one.tmp')
+            Windows._close_delete_parent_lock()
+        access, share = create_file.call_args.args[1:3]
+        self.assertTrue(access & 0x1)  # FILE_LIST_DIRECTORY
+        self.assertEqual(share, Windows.win32con.FILE_SHARE_READ |
+                         Windows.win32con.FILE_SHARE_WRITE)
+
+    def test_lock_delete_parent_blocks_rename_real(self):
+        """The parent lock blocks renaming the parent but not entries in it"""
+        Windows._delete_parent_lock_handle = None
+        Windows._delete_parent_lock_key = None
+        dirname = self.mkdtemp(prefix='bleachbit-parent-lock')
+        filename = os.path.join(dirname, 'file')
+        common.touch_file(filename)
+        Windows._lock_delete_parent(filename)
+        try:
+            with self.assertRaises(PermissionError) as cm:
+                os.rename(dirname, dirname + '.renamed')
+            self.assertEqual(cm.exception.winerror, 32)
+            os.rename(filename, filename + '.renamed')
+            self.assertExists(filename + '.renamed')
+        finally:
+            Windows._close_delete_parent_lock()
+        os.rename(dirname, dirname + '.renamed')
+        self.assertExists(dirname + '.renamed')
+
+    def test_lock_delete_parent_rechecks_reused_handle(self):
+        """A reused parent lock is refused once the parent became a junction"""
+        Windows._delete_parent_lock_handle = None
+        Windows._delete_parent_lock_key = None
+        handle = mock.sentinel.handle
+        junction = {'FileAttributes': 0x10 | Windows.FILE_ATTRIBUTE_REPARSE_POINT,
+                    'ReparseTag': 0xA0000003}
+        delete_func = mock.Mock()
+        with mock.patch('bleachbit.Windows._delete_parent_lock_needed', return_value=True), \
+                mock.patch('bleachbit.Windows._delete_parent_directory', return_value=r'\\?\C:\Windows\Temp'), \
+                mock.patch('bleachbit.Windows.win32file.CreateFile', return_value=handle), \
+                mock.patch('bleachbit.Windows.win32file.GetFileInformationByHandleEx',
+                           side_effect=[self._DIRECTORY_TAG_INFO, junction]), \
+                mock.patch('bleachbit.Windows.win32file.CloseHandle') as close_handle:
+            Windows.with_parent_lock(r'C:\Windows\Temp\one.tmp', delete_func)
+            with self.assertRaises(OSError):
+                Windows.with_parent_lock(
+                    r'C:\Windows\Temp\two.tmp', delete_func)
+            delete_func.assert_called_once_with()
+            close_handle.assert_called_once_with(handle)
+            self.assertIsNone(Windows._delete_parent_lock_handle)
 
     def test_delete_registry_key(self):
         """Unit test for delete_registry_key"""
@@ -210,6 +871,7 @@ class WindowsTestCase(common.BleachbitTestCase):
         # create a nested key
         key = 'Software\\BleachBit\\DeleteThisKey'
         subkey = key + '\\AndThisKey'
+        # pylint: disable-next=possibly-used-before-assignment
         hkey = winreg.CreateKey(winreg.HKEY_CURRENT_USER, subkey)
         hkey.Close()
 
@@ -235,6 +897,440 @@ class WindowsTestCase(common.BleachbitTestCase):
         self.assertTrue(return_value)
         return_value = delete_registry_key('HKCU\\' + key, True)
         self.assertFalse(return_value)
+
+    def test_delete_registry_key_access_denied(self):
+        """Access denied opening the key is reported in preview and clean"""
+        denied = PermissionError(13, 'Access is denied', None, 5)
+        with mock.patch('bleachbit.Windows.winreg.OpenKey', side_effect=denied):
+            for really_delete in (False, True):
+                with self.subTest(really_delete=really_delete):
+                    with self.assertRaises(OSError) as cm:
+                        delete_registry_key(
+                            'HKCU\\Software\\BleachBit\\Denied', really_delete)
+                    self.assertEqual('Access denied in delete_registry_key()',
+                                     cm.exception.strerror)
+
+    def test_delete_updates(self):
+        """Unit test for delete_updates
+
+        As a preview, this does not modify services or delete files.
+        """
+        if not shell.IsUserAnAdmin():
+            # It should return None without doing any work.
+            for _ in delete_updates():
+                pass
+            return
+
+        counter = 0
+        for cmd in delete_updates():
+            counter += 1
+            self.assertIsInstance(cmd, (Delete, Function))
+        logger.debug('delete_updates() returned %s commands', f'{counter:,}')
+
+    def test_delete_updates_closed_between_stops(self):
+        """Closing between the stops restarts the cascaded dependents"""
+        sdist_dir = os.path.expandvars(r'%windir%\SoftwareDistribution')
+        sdist_file = os.path.join(sdist_dir, 'foo')
+
+        def children_in_directory(top, _list_directories):
+            return iter([sdist_file] if top == sdist_dir else [])
+
+        with mock.patch('bleachbit.Windows.shell.IsUserAnAdmin', return_value=True), \
+                mock.patch('bleachbit.Windows.is_service_running', return_value=True), \
+                mock.patch('bleachbit.Windows.get_running_dependent_services',
+                           side_effect=lambda s: ['appidsvc'] if s == 'cryptsvc' else []), \
+                mock.patch('bleachbit.Windows.os.path.exists', return_value=True), \
+                mock.patch('bleachbit.FileUtilities.children_in_directory',
+                           side_effect=children_in_directory), \
+                mock.patch('bleachbit.Windows.run_net_service_command',
+                           return_value=0) as mock_net:
+            commands = delete_updates()
+            for cmd in commands:
+                if isinstance(cmd, Function):
+                    list(cmd.execute(True))
+                # stopping cryptsvc took appidsvc down before its own stop
+                if mock.call('cryptsvc', False) in mock_net.call_args_list:
+                    break
+            commands.close()
+        started = [call.args[0] for call in mock_net.call_args_list
+                   if call.args[1]]
+        self.assertEqual(
+            ['wuauserv', 'cryptsvc', 'bits', 'msiserver', 'appidsvc'], started)
+
+    def test_delete_updates_closed_early(self):
+        """Closing delete_updates() early restarts the services it stopped"""
+        sdist_dir = os.path.expandvars(r'%windir%\SoftwareDistribution')
+        sdist_file = os.path.join(sdist_dir, 'foo')
+
+        def children_in_directory(top, _list_directories):
+            return iter([sdist_file] if top == sdist_dir else [])
+
+        with mock.patch('bleachbit.Windows.shell.IsUserAnAdmin', return_value=True), \
+                mock.patch('bleachbit.Windows.is_service_running', return_value=True), \
+                mock.patch('bleachbit.Windows.get_running_dependent_services',
+                           side_effect=lambda s: ['appidsvc'] if s == 'cryptsvc' else []), \
+                mock.patch('bleachbit.Windows.os.path.exists', return_value=True), \
+                mock.patch('bleachbit.FileUtilities.children_in_directory',
+                           side_effect=children_in_directory), \
+                mock.patch('bleachbit.Windows.run_net_service_command',
+                           return_value=0) as mock_net:
+            commands = delete_updates()
+            for cmd in commands:
+                if isinstance(cmd, Function):
+                    # the mocked stop
+                    list(cmd.execute(True))
+                elif cmd.path == sdist_file:
+                    break
+            commands.close()
+        started = [call.args[0] for call in mock_net.call_args_list
+                   if call.args[1]]
+        self.assertEqual(
+            ['wuauserv', 'cryptsvc', 'bits', 'msiserver', 'appidsvc'], started)
+
+    def test_delete_updates_pending_service(self):
+        """A pending service skips SoftwareDistribution instead of raising"""
+        stop_pending = (0x20, 3, 0, 0, 0, 0, 0)
+        with mock.patch('bleachbit.Windows.shell.IsUserAnAdmin', return_value=True), \
+                mock.patch('win32serviceutil.QueryServiceStatus',
+                           return_value=stop_pending), \
+                mock.patch('bleachbit.Windows.run_net_service_command') as mock_net:
+            with self.assertLogs('bleachbit.Windows', level='WARNING'):
+                commands = list(delete_updates())
+        mock_net.assert_not_called()
+        self.assertFalse(any(isinstance(cmd, Function) for cmd in commands))
+
+    def test_get_running_dependent_services(self):
+        """Unit test for get_running_dependent_services()"""
+        # SERVICE_ENUMERATE_DEPENDENTS on RpcSs needs an elevated token
+        self.skipUnlessAdmin()
+        # Many services depend on RPC, which is always running
+        dependents = get_running_dependent_services('rpcss')
+        self.assertGreater(len(dependents), 0)
+        for dependent in dependents:
+            self.assertIsInstance(dependent, str)
+
+    def test_is_service_running(self):
+        """Unit test for is_service_running()"""
+        # RPC is always running.
+        self.assertTrue(is_service_running('rpcss'))
+        # Windows Update is sometimes running.
+        self.assertIsInstance(is_service_running('wuauserv'), bool)
+        # Non-existent service should raise an error.
+        # pylint: disable-next=possibly-used-before-assignment
+        with self.assertRaises(pywintypes.error):
+            is_service_running('does_not_exist')
+        # None should raise an error.
+        with self.assertRaises(AssertionError):
+            is_service_running(None)
+
+    def test_is_ots_elevation_without_flag_returns_false(self):
+        """Without --uac-sid-token, is_ots_elevation() returns False"""
+        argv = ['bleachbit.exe', '--gui']
+        with mock.patch('bleachbit.Windows.sys.argv', argv):
+            self.assertFalse(is_ots_elevation())
+
+    def test_is_ots_elevation_false_when_tokens_match(self):
+        """If current token matches parent token, there is no elevation"""
+        parent_token = 'ABCDEFGH'
+        argv = ['bleachbit.exe', '--gui', '--uac-sid-token', parent_token]
+        with mock.patch('bleachbit.Windows.sys.argv', argv):
+            with mock.patch('bleachbit.Windows.get_sid_token_48', return_value=parent_token):
+                self.assertFalse(is_ots_elevation())
+
+    def test_is_ots_elevation_true_when_tokens_differ(self):
+        """If current token differs from parent token, elevation is detected"""
+        parent_token = 'ABCDEFGH'
+        argv = ['bleachbit.exe', '--gui', '--uac-sid-token', parent_token]
+        with mock.patch('bleachbit.Windows.sys.argv', argv):
+            with mock.patch('bleachbit.Windows.get_sid_token_48', return_value='DIFFERNT'):
+                self.assertTrue(is_ots_elevation())
+
+    def test_is_ots_elevation_ignores_flag_without_value(self):
+        """A trailing --uac-sid-token without value should not crash and returns False"""
+        argv = ['bleachbit.exe', '--gui', '--uac-sid-token']
+        with mock.patch('bleachbit.Windows.sys.argv', argv):
+            self.assertFalse(is_ots_elevation())
+
+    def test_is_ots_elevation_returns_false_on_get_sid_error(self):
+        """If get_sid_token_48() raises, is_ots_elevation() falls back to False"""
+        parent_token = 'ABCDEFGH'
+        argv = ['bleachbit.exe', '--gui', '--uac-sid-token', parent_token]
+        with mock.patch('bleachbit.Windows.sys.argv', argv):
+            with mock.patch('bleachbit.Windows.get_sid_token_48', side_effect=RuntimeError('error')):
+                self.assertFalse(is_ots_elevation())
+
+    def test_add_command_line_parameters_omits_duplicate_gui(self):
+        """UAC parameters already include --gui, so do not append it again."""
+        argv = ['bleachbit.exe', '--gui', '--exit']
+        with mock.patch('bleachbit.Windows.sys.argv', argv):
+            self.assertEqual(
+                '--gui --no-uac --exit',
+                _add_command_line_parameters(['--gui', '--no-uac']))
+
+    def test_add_command_line_parameters_context_menu_omits_duplicate_gui(self):
+        """Context-menu UAC parameters keep the quoted path but skip --gui."""
+        file_to_shred = r'C:\Users\test user\AppData\Local\Temp\delete me.txt'
+        argv = [
+            'bleachbit.exe',
+            '--gui',
+            '--no-delete-confirmation',
+            '--context-menu',
+            file_to_shred,
+        ]
+        with mock.patch('bleachbit.Windows.sys.argv', argv):
+            self.assertEqual(
+                '--gui --no-uac --no-delete-confirmation --context-menu '
+                f'"{file_to_shred}"',
+                _add_command_line_parameters(['--gui', '--no-uac']))
+
+    def test_elevate_privileges_omits_duplicate_gui(self):
+        """The elevated UAC command line should contain --gui only once."""
+        argv = ['bleachbit.exe', '--gui', '--exit']
+        with mock.patch('bleachbit.Windows.sys.argv', argv):
+            with mock.patch('bleachbit.Windows.shell.IsUserAnAdmin', return_value=False):
+                with mock.patch('bleachbit.Windows.path_on_network', return_value=False):
+                    with mock.patch('bleachbit.Windows.get_sid_token_48', return_value='ABCDEFGH'):
+                        with mock.patch(
+                                'bleachbit.Windows.shell.ShellExecuteEx',
+                                return_value={'hProcess': object()}) as shell_exec:
+                            self.assertTrue(elevate_privileges(True))
+
+        parameters = shell_exec.call_args.kwargs['lpParameters']
+        self.assertEqual(1, parameters.split().count('--gui'))
+        self.assertIn('--exit', parameters)
+
+    def test_elevate_privileges_error(self):
+        """A failed UAC elevation continues without elevation"""
+        for winerror in (1223, 5, 1062):
+            error = pywintypes.error(winerror, 'ShellExecuteEx', 'error')
+            with mock.patch('bleachbit.Windows.shell.IsUserAnAdmin', return_value=False), \
+                    mock.patch('bleachbit.Windows.path_on_network', return_value=False), \
+                    mock.patch('bleachbit.Windows.get_sid_token_48', return_value='ABCDEFGH'), \
+                    mock.patch('bleachbit.Windows.shell.ShellExecuteEx', side_effect=error):
+                self.assertFalse(elevate_privileges(True), winerror)
+
+    def test_splash_thread_reuses_cached_class_atom(self):
+        """_register_window_class skips RegisterClass when cached."""
+        splash = SplashThread()
+        # Restore rather than clear: the class stays registered in this
+        # process, so a later real splash needs its atom back.
+        previous = SplashThread._class_atom
+        self.addCleanup(lambda: setattr(SplashThread, '_class_atom', previous))
+        SplashThread._class_atom = 9876
+        with mock.patch('bleachbit.Windows.win32gui.RegisterClass') as mock_register:
+            atom = splash._register_window_class(mock.Mock())
+        self.assertEqual(atom, 9876)
+        mock_register.assert_not_called()
+
+    def test_splash_thread_recovers_when_class_exists(self):
+        """_register_window_class handles ERROR_CLASS_ALREADY_EXISTS."""
+        splash = SplashThread()
+        previous = SplashThread._class_atom
+        self.addCleanup(lambda: setattr(SplashThread, '_class_atom', previous))
+        SplashThread._class_atom = None
+        wnd_class = mock.Mock()
+        wnd_class.hInstance = mock.sentinel.instance
+        wnd_class.lpszClassName = 'SimpleWin32'
+        register_error = pywintypes.error(
+            1410, 'RegisterClass', 'Class already exists.')
+        with mock.patch('bleachbit.Windows.win32gui.RegisterClass', side_effect=register_error) as mock_register, \
+                mock.patch('bleachbit.Windows.win32gui.GetClassInfo', return_value=(4321,)) as mock_get_class_info:
+            atom = splash._register_window_class(wnd_class)
+        self.assertEqual(atom, 4321)
+        self.assertEqual(SplashThread._class_atom, 4321)
+        mock_register.assert_called_once_with(wnd_class)
+        mock_get_class_info.assert_called_once_with(
+            wnd_class.hInstance, wnd_class.lpszClassName)
+
+    def test_splash_thread_suppresses_startup_error(self):
+        """start() does not fail the GUI if splash initialization fails."""
+        splash = SplashThread()
+        with mock.patch.object(splash, '_show_splash_screen', side_effect=RuntimeError('boom')):
+            splash.start()
+        self.assertIsNotNone(splash._startup_error)
+
+    def test_splash_thread_join_handles_missing_window(self):
+        """join() succeeds even when window handle was never created."""
+        splash = SplashThread()
+        splash._startup_error = RuntimeError('boom')
+        splash._splash_screen_started.set()
+        splash.start = lambda: None  # prevent thread start
+        # Directly call join; should not raise even though handle is None
+        splash.join(timeout=0)
+
+    def test_splash_thread_join_uses_send_message_timeout(self):
+        """join() closes the splash synchronously with a timeout."""
+        splash = SplashThread()
+        splash._splash_screen_handle = 1234
+        with mock.patch.object(splash, 'is_alive', return_value=True), \
+                mock.patch.object(splash, '_hide_window') as mock_hide, \
+                mock.patch('bleachbit.Windows.win32gui.IsWindow', return_value=True), \
+                mock.patch(
+                    'bleachbit.Windows.ctypes.windll.user32.SendMessageTimeoutW',
+                    return_value=1) as mock_send, \
+                mock.patch('bleachbit.Windows.win32gui.PostMessage') as mock_post, \
+                mock.patch('bleachbit.Windows.Thread.join') as mock_thread_join:
+            splash.join(timeout=0)
+
+        mock_send.assert_called_once()
+        mock_hide.assert_called_once_with(1234)
+        mock_post.assert_not_called()
+        mock_thread_join.assert_called_once_with(splash, timeout=0)
+
+    def test_splash_thread_join_falls_back_after_send_failure(self):
+        """join() falls back to PostMessage if synchronous close fails."""
+        splash = SplashThread()
+        splash._splash_screen_handle = 1234
+        with mock.patch.object(splash, 'is_alive', return_value=True), \
+                mock.patch.object(splash, '_hide_window'), \
+                mock.patch('bleachbit.Windows.win32gui.IsWindow', return_value=True), \
+                mock.patch(
+                    'bleachbit.Windows.ctypes.windll.user32.SendMessageTimeoutW',
+                    side_effect=RuntimeError('boom')), \
+                mock.patch('bleachbit.Windows.win32gui.PostMessage') as mock_post, \
+                mock.patch('bleachbit.Windows.Thread.join'):
+            splash.join(timeout=0)
+
+        mock_post.assert_called_once_with(
+            1234, Windows.win32con.WM_CLOSE, 0, 0)
+
+    def test_get_splash_screen_delay_seconds_default(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('BLEACHBIT_SPLASH_SCREEN_DELAY', None)
+            self.assertEqual(get_splash_screen_delay_seconds(), 0.0)
+
+    def test_get_splash_screen_delay_seconds_valid(self):
+        with mock.patch.dict(os.environ, {'BLEACHBIT_SPLASH_SCREEN_DELAY': '3.5'}, clear=False):
+            self.assertEqual(get_splash_screen_delay_seconds(), 3.5)
+
+    def test_get_splash_screen_delay_seconds_invalid(self):
+        with mock.patch.dict(os.environ, {'BLEACHBIT_SPLASH_SCREEN_DELAY': 'abc'}, clear=False):
+            self.assertEqual(get_splash_screen_delay_seconds(), 0.0)
+
+    def test_get_splash_screen_delay_seconds_negative(self):
+        with mock.patch.dict(os.environ, {'BLEACHBIT_SPLASH_SCREEN_DELAY': '-1'}, clear=False):
+            self.assertEqual(get_splash_screen_delay_seconds(), 0.0)
+
+    @common.skipUnlessDestructive
+    def test_run_net_service_command(self):
+        """Integration test for run_net_service_command().
+
+        Actually stop/start Windows Update service.
+
+        spooler (Print Spooler) is often on by default and has no dependencies.
+
+        Windows Audio Endpoint Builder (AudioEndpointBuilder) is often on
+        by default and depends on audiosrv (Windows Audio).
+
+        Requires admin.
+        """
+        if not shell.IsUserAnAdmin():
+            self.skipTest('requires administrator privileges')
+
+        def _service_exists_and_enabled(svc):
+            # pylint: disable-next=possibly-used-before-assignment
+            scm = win32service.OpenSCManager(
+                None, None, win32service.SC_MANAGER_CONNECT)
+            try:
+                hs = win32service.OpenService(
+                    scm, svc, win32service.SERVICE_QUERY_STATUS | win32service.SERVICE_QUERY_CONFIG)
+                try:
+                    cfg = win32service.QueryServiceConfig(hs)
+                    return cfg[1] != win32service.SERVICE_DISABLED
+                finally:
+                    win32service.CloseServiceHandle(hs)
+            except pywintypes.error:
+                return False
+            finally:
+                win32service.CloseServiceHandle(scm)
+
+        def _can_open_all_access(svc):
+            scm = win32service.OpenSCManager(
+                None, None, win32service.SC_MANAGER_CONNECT)
+            try:
+                try:
+                    hs = win32service.OpenService(
+                        scm, svc, win32service.SERVICE_ALL_ACCESS)
+                except pywintypes.error:
+                    return False
+                win32service.CloseServiceHandle(hs)
+                return True
+            finally:
+                win32service.CloseServiceHandle(scm)
+
+        is_ci = 'GITHUB_ACTIONS' in os.environ
+        if is_ci:
+            candidates = ('bits', 'wuauserv',
+                          'AudioEndpointBuilder', 'spooler')
+            service = None
+            # Prefer already-running to avoid state changes
+            for s in candidates:
+                if _service_exists_and_enabled(s) and _can_open_all_access(s) and is_service_running(s):
+                    service = s
+                    break
+            # If none are running, pick any we can open with required access
+            if not service:
+                for s in candidates:
+                    if _service_exists_and_enabled(s) and _can_open_all_access(s):
+                        service = s
+                        break
+        else:
+            candidates = ('AudioEndpointBuilder',
+                          'spooler', 'bits', 'wuauserv')
+            service = None
+            for s in candidates:
+                if _service_exists_and_enabled(s):
+                    service = s
+                    break
+        if not service:
+            self.skipTest('no suitable startable service on this machine')
+
+        initial_running = is_service_running(service)
+
+        try:
+            if is_ci:
+                ret = run_net_service_command(service, True)
+                self.assertEqual(ret, 0)
+                ret = run_net_service_command(service, True)
+                self.assertEqual(ret, 0)
+            else:
+                ret = run_net_service_command(service, False)
+                self.assertEqual(ret, 0)
+                self.assertFalse(is_service_running(service))
+                if service == 'AudioEndpointBuilder':
+                    self.assertFalse(is_service_running('audiosrv'))
+                ret = run_net_service_command(service, False)
+                self.assertEqual(ret, 0)
+                self.assertFalse(is_service_running(service))
+                ret = run_net_service_command(service, True)
+                self.assertEqual(ret, 0)
+                self.assertTrue(is_service_running(service))
+                ret = run_net_service_command(service, True)
+                self.assertEqual(ret, 0)
+                self.assertTrue(is_service_running(service))
+        finally:
+            if not is_ci:
+                run_net_service_command(service, initial_running)
+                self.assertEqual(initial_running, is_service_running(service))
+
+    def test_run_net_service_command_not_admin(self):
+        """Test as run_net_service_command() as not admin user"""
+        if shell.IsUserAnAdmin():
+            self.skipTest('requires non-admin user')
+        service = 'wuauserv'
+        initial_running = is_service_running(service)
+        for start in (True, False):
+            with self.assertRaises(RuntimeError):
+                run_net_service_command(service, start)
+            self.assertEqual(is_service_running(service), initial_running)
+
+    def test_run_net_service_command_invalid_service(self):
+        """Test as run_net_service_command() with invalid service"""
+        for service in ('does_not_exist', None):
+            for start in (True, False):
+                with self.subTest(service=service, start=start):
+                    with self.assertRaises((AssertionError, RuntimeError)):
+                        run_net_service_command(service, start)
 
     def test_delete_registry_value(self):
         """Unit test for delete_registry_value"""
@@ -277,10 +1373,33 @@ class WindowsTestCase(common.BleachbitTestCase):
     def test_detect_registry_key(self):
         """Test for detect_registry_key()"""
         self.assertTrue(detect_registry_key('HKCU\\Software\\Microsoft\\'))
-        self.assertTrue(not detect_registry_key('HKCU\\Software\\DoesNotExist'))
+        self.assertTrue(not detect_registry_key(
+            'HKCU\\Software\\DoesNotExist'))
 
+    def test_registry_helpers_use_64_bit_view(self):
+        """Registry keys open in the 64-bit view, even from 32-bit Python"""
+        key = 'HKLM\\Software\\BleachBitTestWow64'
+        not_found = FileNotFoundError(2, 'not found', None, 2)
+        with mock.patch('bleachbit.Windows.winreg.OpenKey',
+                        side_effect=not_found) as open_key:
+            self.assertFalse(detect_registry_key(key))
+            self.assertFalse(delete_registry_key(key, False))
+            self.assertFalse(delete_registry_value(key, 'value', False))
+            self.assertIsNone(read_registry_key(key, 'value'))
+        views = [call.args[3] & (winreg.KEY_WOW64_64KEY | winreg.KEY_WOW64_32KEY)
+                 for call in open_key.call_args_list]
+        # detection also looks in the 32-bit view
+        self.assertEqual([winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY] +
+                         [winreg.KEY_WOW64_64KEY] * 3, views)
+
+        with mock.patch('bleachbit.Windows.winreg.OpenKey',
+                        side_effect=[not_found, mock.MagicMock()]):
+            self.assertTrue(detect_registry_key(key))
+
+    @pytest.mark.xdist_group('gui')
     def test_get_clipboard_paths(self):
         """Unit test for get_clipboard_paths"""
+        self.addCleanup(clear_clipboard)
         # The clipboard is an unknown state, so check the function does
         # not crash and that it returns the right data type.
         paths = get_clipboard_paths()
@@ -305,25 +1424,100 @@ class WindowsTestCase(common.BleachbitTestCase):
         self.assertEqual(paths, ())
 
         # Put files in the clipboard in supported format
-        args = ('powershell.exe', 'Set-Clipboard',
-                '-Path', r'c:\windows\*.exe')
+        args = ('powershell.exe', '-NoProfile', '-NonInteractive',
+                'Set-Clipboard', '-Path', r'c:\windows\*.exe')
         (ext_rc, _stdout, _stderr) = General.run_external(args)
-        self.assertEqual(ext_rc, 0)
+        # It may print "Requested Clipboard operation did not succeed" to stderr.
+        self.assertEqual(
+            ext_rc, 0, f"powershell.exe failed with return code {ext_rc}: {_stderr}")
         paths = get_clipboard_paths()
         self.assertIsInstance(paths, (type(None), tuple))
         self.assertGreater(len(paths), 1)
         for path in paths:
             self.assertExists(path)
 
+    def test_get_font_conf_file(self):
+        """Unit test for get_font_conf_file"""
+        # This tests only one of three situations.
+        from bleachbit.GtkShim import gtk_may_be_available
+        if not gtk_may_be_available():
+            self.skipTest("GTK is not available")
+        font_fn = get_font_conf_file()
+        self.assertExists(font_fn)
+
+    def test_has_fontconfig_cache(self):
+        """Unit test for has_fontconfig_cache()"""
+        font_conf = self.write_file(
+            'fonts.conf',
+            text='<?xml version="1.0"?>\n'
+            '<fontconfig>\n'
+            '  <cachedir>~/.fontconfig</cachedir>\n'
+            '</fontconfig>\n')
+        self.assertFalse(has_fontconfig_cache(font_conf))
+
+    def test_has_fontconfig_cache_any_version(self):
+        """A cache file of any fontconfig cache version is found"""
+        cache_dir = self.mkdir('fc_cache')
+        font_conf = self.write_file(
+            'fonts_cache_dir.conf',
+            text='<?xml version="1.0"?>\n'
+            f'<fontconfig><cachedir>{cache_dir}</cachedir></fontconfig>\n')
+        self.assertFalse(has_fontconfig_cache(font_conf))
+        self.write_file(os.path.join(cache_dir, 'x-le32d8.cache-9'))
+        self.assertTrue(has_fontconfig_cache(font_conf))
+
+    def test_has_fontconfig_cache_install_relative(self):
+        """A cachedir starting with / is under the folder holding etc/fonts"""
+        fonts_dir = self.mkdir(os.path.join('fc_prefix', 'etc', 'fonts'))
+        font_conf = self.write_file(
+            os.path.join(fonts_dir, 'fonts.conf'),
+            text='<?xml version="1.0"?>\n'
+            '<fontconfig><cachedir>/var/cache/fontconfig</cachedir>'
+            '</fontconfig>\n')
+        self.assertFalse(has_fontconfig_cache(font_conf))
+        cache_dir = self.mkdir(
+            os.path.join('fc_prefix', 'var', 'cache', 'fontconfig'))
+        self.write_file(os.path.join(cache_dir, 'x-le32d8.cache-9'))
+        self.assertTrue(has_fontconfig_cache(font_conf))
+
+    def test_has_fontconfig_cache_rejects_dtd(self):
+        """A fonts.conf with a DTD is rejected (entity-expansion defense)"""
+        font_conf = self.write_file(
+            'fonts_dtd.conf',
+            text='<?xml version="1.0"?>\n'
+            '<!DOCTYPE fontconfig [ <!ENTITY x "y"> ]>\n'
+            '<fontconfig><cachedir>~/.fontconfig</cachedir></fontconfig>\n')
+        self.assertRaises(ValueError, has_fontconfig_cache, font_conf)
+
+    def test_has_fontconfig_cache_allows_external_doctype(self):
+        """A real fonts.conf, which declares an external-only DOCTYPE, must not be rejected"""
+        font_conf = self.write_file(
+            'fonts_external_dtd.conf',
+            text='<?xml version="1.0"?>\n'
+            '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n'
+            '<fontconfig><cachedir>~/.fontconfig</cachedir></fontconfig>\n')
+        self.assertFalse(has_fontconfig_cache(font_conf))
+
+    def test_browse_folder_not_file_system(self):
+        """browse_folder() returns None for a folder without a file system path"""
+        e_fail = -2147467259
+        # pylint: disable-next=possibly-used-before-assignment
+        error = pywintypes.com_error(e_fail, 'Unspecified error', None, None)
+        with mock.patch('bleachbit.Windows.shell') as mock_shell:
+            pidl = object()
+            mock_shell.SHBrowseForFolder.return_value = (pidl, 'This PC', 0)
+            mock_shell.SHGetPathFromIDListW.side_effect = error
+            # pylint: disable-next=possibly-used-before-assignment
+            self.assertIsNone(Windows.browse_folder(None, 'title'))
+        flags = mock_shell.SHBrowseForFolder.call_args.args[3]
+        # pylint: disable-next=possibly-used-before-assignment
+        expected_flags = shellcon.BIF_RETURNONLYFSDIRS | shellcon.BIF_EDITBOX
+        self.assertEqual(flags, expected_flags)
+
     def test_get_known_folder_path(self):
         """Unit test for get_known_folder_path"""
         ret = get_known_folder_path('LocalAppDataLow')
         self.assertNotEqual(ret, '')
-        if parse_windows_build() <= 6.0:
-            # Before Vista
-            self.assertEqual(ret, None)
-            return
-        # Vista or later
         self.assertNotEqual(ret, None)
         self.assertExists(ret)
 
@@ -335,6 +1529,25 @@ class WindowsTestCase(common.BleachbitTestCase):
             self.assertEqual(drive, drive.upper())
         self.assertIn("C:\\", drives)
 
+    def test_get_sid_token_48_basic_properties(self):
+        """get_sid_token_48() returns an 8-char, URL-safe ASCII string"""
+        token = get_sid_token_48()
+        self.assertIsString(token)
+        # 6 bytes (48 bits) become 8 base64-url characters without padding
+        self.assertEqual(len(token), 8)
+        for ch in token:
+            self.assertLess(ord(ch), 128)
+        # urlsafe_b64encode must not use '+', '/', or '='
+        self.assertNotIn('+', token)
+        self.assertNotIn('/', token)
+        self.assertNotIn('=', token)
+
+    def test_get_sid_token_48_is_deterministic_for_current_process(self):
+        """Multiple calls for the same process should yield the same token"""
+        t1 = get_sid_token_48()
+        t2 = get_sid_token_48()
+        self.assertEqual(t1, t2)
+
     def test_get_windows_version(self):
         """Unit test for get_windows_version"""
         v = get_windows_version()
@@ -342,24 +1555,46 @@ class WindowsTestCase(common.BleachbitTestCase):
         self.assertGreater(v, 5)
         self.assertIsInstance(v, Decimal)
 
+    @pytest.mark.xdist_group('recycle-bin')
     def test_empty_recycle_bin(self):
         """Unit test for empty_recycle_bin"""
         # check the function basically works
         for drive in get_fixed_drives():
             ret = empty_recycle_bin(drive, really_delete=False)
             self.assertIsInteger(ret)
-        if not common.destructive_tests('recycle bin'):
-            return
-        # check it deletes files for fixed drives
-        put_files_into_recycle_bin()
+
+    @pytest.mark.no_xdist
+    @pytest.mark.xdist_group('recycle-bin')
+    @common.skipUnlessDestructive
+    def test_empty_recycle_bin_per_drive_destructive(self):
+        """Empty recycle bin in each drive individually"""
+        put_objects_into_recycle_bin()
         for drive in get_fixed_drives():
-            ret = empty_recycle_bin(drive, really_delete=True)
-            self.assertIsInteger(ret)
-        # check it deletes files for all drives
-        put_files_into_recycle_bin()
+            with self.subTest(drive=drive):
+                try:
+                    ret = empty_recycle_bin(drive, really_delete=True)
+                except pywintypes.com_error as e:
+                    if e.args[0] == -2147024893 and 'GITHUB_ACTIONS' in os.environ:
+                        self.skipTest(
+                            'reproducible only in CI and does not '
+                            'test a scenario used outside the tests')
+                    raise
+                self.assertIsInteger(ret)
+
+    @pytest.mark.no_xdist
+    @pytest.mark.xdist_group('recycle-bin')
+    @common.skipUnlessDestructive
+    def test_empty_recycle_bin_all_drives_destructive(self):
+        """Empty recycle bin in all drives at once"""
+        put_objects_into_recycle_bin()
         ret = empty_recycle_bin(None, really_delete=True)
         self.assertIsInteger(ret)
-        # Repeat two for reasons.
+
+        # Verify that there are no objects in the bin.
+        for _f in get_recycle_bin():
+            self.fail('recycle bin should be empty, but it is not')
+
+        # Repeat the call to empty for two reasons.
         # 1. Trying to empty an empty recycling bin can cause
         #    a 'catastrophic failure' error (handled in the function)
         # 2. It should show zero bytes were deleted
@@ -374,10 +1609,9 @@ class WindowsTestCase(common.BleachbitTestCase):
         """
 
         from bleachbit.WindowsWipe import file_wipe, open_file, close_file, file_make_sparse
-        from bleachbit.Windows import elevate_privileges
         from win32con import GENERIC_WRITE, WRITE_DAC
 
-        dirname = tempfile.mkdtemp(prefix='bleachbit-file-wipe')
+        dirname = self.mkdtemp()
 
         filenames = ('short', 'long' + 'x' * 250, 'utf8-ɡælɪk')
         for filename in filenames:
@@ -386,8 +1620,9 @@ class WindowsTestCase(common.BleachbitTestCase):
 
             def _write_file(longname, contents):
                 self.write_file(longname, contents)
-                import win32api
                 shortname = extended_path_undo(
+                    # win32api is imported on Windows, where this test runs.
+                    # pylint: disable-next=possibly-used-before-assignment
                     win32api.GetShortPathName(extended_path(longname)))
                 self.assertExists(shortname)
                 return shortname
@@ -396,23 +1631,31 @@ class WindowsTestCase(common.BleachbitTestCase):
                 import win32security
                 import ntsecuritycon as con
 
-                user, _, _ = win32security.LookupAccountName("", win32api.GetUserName())
+                user, _, _ = win32security.LookupAccountName(
+                    # pylint: disable-next=possibly-used-before-assignment
+                    "", win32api.GetUserName())
                 dacl = win32security.ACL()
-                dacl.AddAccessDeniedAce(win32security.ACL_REVISION, con.FILE_GENERIC_READ | con.FILE_GENERIC_WRITE, user)
+                dacl.AddAccessDeniedAce(
+                    win32security.ACL_REVISION, con.FILE_GENERIC_READ | con.FILE_GENERIC_WRITE, user)
                 win32security.SetSecurityInfo(fh, win32security.SE_FILE_OBJECT, win32security.DACL_SECURITY_INFORMATION,
-                    None, None, dacl, None)
+                                              None, None, dacl, None)
 
-            def _test_wipe(contents, deny_access = False, is_sparse=False):
+            def _test_wipe(contents, deny_access=False, is_sparse=False):
+                # The closure runs inside the iteration that defines these names.
+                # pylint: disable=cell-var-from-loop
                 shortname = _write_file(longname, contents)
                 if deny_access or is_sparse:
-                    fh = open_file(extended_path(longname), mode=GENERIC_WRITE | WRITE_DAC)
+                    fh = open_file(extended_path(longname),
+                                   mode=GENERIC_WRITE | WRITE_DAC)
                     if is_sparse:
                         file_make_sparse(fh)
                     if deny_access:
                         _deny_access(fh)
                     close_file(fh)
-                logger.debug('test_file_wipe(): filename length={}, shortname length ={}, contents length={}, is_sparse={}'.format(
-                    len(longname), len(shortname), len(contents), is_sparse))
+                logger.debug(
+                    'test_file_wipe(): filename length=%d, '
+                    'shortname length =%d, contents length=%d, is_sparse=%s',
+                    len(longname), len(shortname), len(contents), is_sparse)
                 if shell.IsUserAnAdmin():
                     # wiping requires admin privileges
                     file_wipe(shortname)
@@ -433,7 +1676,7 @@ class WindowsTestCase(common.BleachbitTestCase):
 
             # requires wiping of extents: special file case
             elevate_privileges(False)
-            _test_wipe(b'secret' * 100000, deny_access = True, is_sparse=True)
+            _test_wipe(b'secret' * 100000, deny_access=True, is_sparse=True)
 
         shutil.rmtree(dirname, True)
 
@@ -444,25 +1687,11 @@ class WindowsTestCase(common.BleachbitTestCase):
             logger.warning(
                 'You should also run test_file_wipe() with admin privileges.')
 
-    def test_is_process_running(self):
-        # winlogon.exe runs on Windows XP and Windows 7
-        # explorer.exe does not run on Appveyor
-        tests = ((True, 'winlogon.exe'),
-                 (True, 'WinLogOn.exe'),
-                 (False, 'doesnotexist.exe'))
-        for test in tests:
-            self.assertEqual(test[0],
-                             is_process_running(test[1]),
-                             'Expecting is_process_running(%s) = %s' %
-                             (test[1], test[0]))
-
     def test_setup_environment(self):
         """Unit test for setup_environment"""
         setup_environment()
         envs = ['commonappdata', 'documents', 'music', 'pictures', 'video',
-                'localappdata']
-        if parse_windows_build() >= 6.0:
-            envs.append('localappdatalow')
+                'localappdata', 'localappdatalow']
         for env in envs:
             self.assertExists(os.environ[env])
 
@@ -475,6 +1704,16 @@ class WindowsTestCase(common.BleachbitTestCase):
             (hive, key) = split_registry_key(input_key)
             self.assertEqual(expected_hive, hive)
             self.assertEqual(expected_key, key)
+
+    def test_read_registry_key(self):
+        """Unit test for read_registry_key"""
+        tests = (('HKCR\\.bmp', 'PerceivedType', 'image'),
+                 ('HKCU\\Software\\BleachBit\\DoesNotExist', 'DoesNotExist', None))
+        for (input_key, input_value, expected_value) in tests:
+            value = read_registry_key(input_key, input_value)
+            if value is not None:
+                value = value.lower()  # casing varies by Windows version: image vs Image
+            self.assertEqual(expected_value, value)
 
     def test_parse_windows_build(self):
         """Unit test for parse_windows_build"""
@@ -501,6 +1740,102 @@ class WindowsTestCase(common.BleachbitTestCase):
         ret = shell_change_notify()
         self.assertEqual(ret, 0)
 
+    def test_splash_screen(self):
+        """Unit test for splash screen"""
+        splash_thread = SplashThread()
+        icon_path = splash_thread.get_icon_path()
+        self.assertTrue(icon_path.is_absolute())
+        self.assertExists(icon_path)
+        splash_thread.start()
+        timeout = 5.0  # seconds
+        start_time = time.time()
+        time.sleep(1)
+        while not splash_thread.is_alive() and (time.time() - start_time) < timeout:
+            time.sleep(0.1)
+        self.assertTrue(splash_thread.is_alive(),
+                        'Splash thread did not start within timeout')
+        splash_thread.join()
+
+        # Originally, running twice in same process caused indefinite hang,
+        # so run it twice.
+        repeat = SplashThread()
+        repeat.start()
+        repeat.join()
+
+    def test_splash_thread_start_runs_sent_messages(self):
+        """start() runs messages sent to its thread while it waits"""
+        received = []
+
+        def wnd_proc(hwnd, msg, wparam, lparam):
+            # pylint: disable-next=possibly-used-before-assignment
+            if msg == win32con.WM_USER:
+                received.append(wparam)
+                return 0
+            # pylint: disable-next=possibly-used-before-assignment
+            return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+
+        wnd_class = win32gui.WNDCLASS()
+        wnd_class.lpszClassName = 'BleachBitSplashWaitTest'
+        wnd_class.lpfnWndProc = wnd_proc
+        wnd_class.hInstance = win32api.GetModuleHandle(None)
+        atom = win32gui.RegisterClass(wnd_class)
+        hwnd = win32gui.CreateWindowEx(
+            0, atom, '', 0, 0, 0, 0, 0, win32con.HWND_MESSAGE, 0,
+            wnd_class.hInstance, None)
+
+        def send_from_splash_thread(_self, _splash_hwnd):
+            # Stands in for GDK's keyboard hook, which the splash's ALT keys
+            # wait on. A sent message, unlike keys, needs no input desktop.
+            win32gui.SendMessageTimeout(hwnd, win32con.WM_USER, 1, 0,
+                                        win32con.SMTO_NORMAL, 2000)
+            return True
+
+        splash_thread = SplashThread()
+        try:
+            with mock.patch.object(SplashThread, '_force_set_foreground_window',
+                                   send_from_splash_thread):
+                splash_thread.start()
+            received_during_start = list(received)
+        finally:
+            splash_thread.join()
+            win32gui.DestroyWindow(hwnd)
+            win32gui.UnregisterClass(atom, wnd_class.hInstance)
+        self.assertEqual(received_during_start, [1])
+
+    def test_splash_screen_window_pos(self):
+        """Unit test for calculate_window_position()"""
+        splash_thread = SplashThread()
+
+        # Test with a typical 1080p display
+        display_width = 1920
+        display_height = 1080
+        x, y, width, height = splash_thread.calculate_window_position(
+            display_width, display_height)
+
+        # The window should have positive dimensions
+        self.assertGreater(width, 0)
+        self.assertGreater(height, 0)
+
+        # The window position should be positive (on screen)
+        self.assertGreaterEqual(x, 0)
+        self.assertGreaterEqual(y, 0)
+
+        # The window should fit within the display
+        self.assertLessEqual(x + width, display_width)
+        self.assertLessEqual(y + height, display_height)
+
+        # The window should be roughly centered
+        # x should be approximately (display_width - width) / 2
+        expected_x = (display_width - width) // 2
+        self.assertEqual(x, expected_x)
+        # y should be approximately (display_height - height) / 2
+        expected_y = (display_height - height) // 2
+        self.assertEqual(y, expected_y)
+
+        # Splash screen is the square logo.
+        self.assertEqual(width, 256)
+        self.assertEqual(height, 256)
+
     def test_set_environ(self):
         for folder in ['folderäö', 'folder']:
             test_dir = os.path.join(self.tempdir, folder)
@@ -509,3 +1844,128 @@ class WindowsTestCase(common.BleachbitTestCase):
             set_environ('cd_test', test_dir)
             self.assertEqual(os.environ['cd_test'], test_dir)
             os.environ.pop('cd_test')
+
+    @staticmethod
+    def _parse_windows_command_line(cmd):
+        """Parse a command line the same way Windows does (CommandLineToArgvW)."""
+        fn = ctypes.windll.shell32.CommandLineToArgvW
+        fn.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+        fn.restype = ctypes.POINTER(ctypes.c_wchar_p)
+        argc = ctypes.c_int()
+        argv_p = fn(cmd, ctypes.byref(argc))
+        try:
+            return [argv_p[i] for i in range(argc.value)]
+        finally:
+            ctypes.windll.kernel32.LocalFree(argv_p)
+
+    def _assert_roundtrips(self, base, extra_argv):
+        """cmd has no exe name, so prepend one before parsing it back."""
+        with mock.patch('bleachbit.Windows.sys.argv', ['bleachbit.exe'] + extra_argv):
+            cmd = _add_command_line_parameters(base)
+        argv = self._parse_windows_command_line(f'"dummy.exe" {cmd}')
+        self.assertEqual(argv[1:], base + extra_argv)
+
+    def test_add_command_line_parameters_quoting(self):
+        """Args must round-trip unchanged through the Windows argv parser."""
+        base = [r'C:\Program Files\BleachBit\bleachbit.py', '--gui', '--no-uac']
+
+        # simple argument
+        self._assert_roundtrips(base, ['--debug-log'])
+
+        # argument with spaces
+        self._assert_roundtrips(base, ['--debug-log', r'C:\temp\my log.txt'])
+
+        # embedded quotes and ampersands attempting to break out of the argument
+        malicious = r'C:\test" & calc.exe & "'
+        self._assert_roundtrips(base, ['--context-menu', malicious])
+
+        # embedded quote attempting to inject a whole extra argument
+        injection = 'foo" --no-uac "bar'
+        self._assert_roundtrips(base, ['--context-menu', injection])
+
+        # multiple arguments, one with spaces, in a realistic combination
+        self._assert_roundtrips(
+            base, ['--context-menu', r'C:\path with spaces\file.txt', '--debug-log'])
+
+    def test_appdata_acl_check_and_fix(self):
+        """Detect and fix a broken 0o700 ACL on %APPDATA%\\BleachBit"""
+        # Simulate the elevated first run: the folder is owned by the current
+        # user here, so pretend the current user is someone else.
+        import win32security  # pylint: disable=import-outside-toplevel
+        other_sid = win32security.ConvertStringSidToSid('S-1-5-32-545')
+        parent = os.path.join(self.tempdir, 'appdata_roaming')
+        os.mkdir(parent)
+        self.assertFalse(has_broken_appdata_acl(parent))
+        self.assertFalse(has_broken_appdata_acl(parent, other_sid))
+
+        broken_dir = os.path.join(parent, 'BleachBit')
+        os.mkdir(broken_dir, 0o700)
+        cleaners_dir = os.path.join(broken_dir, 'cleaners')
+        os.mkdir(cleaners_dir, 0o700)
+        ini_file = os.path.join(broken_dir, 'bleachbit.ini')
+        self.write_file(ini_file, b'[bleachbit]\n')
+
+        # A 0o700 folder owned by the current user works, so it is not flagged.
+        # When elevated the owner is Administrators, so read it from the file.
+        owner_sid = win32security.GetFileSecurity(
+            broken_dir, win32security.OWNER_SECURITY_INFORMATION).GetSecurityDescriptorOwner()
+        self.assertFalse(has_broken_appdata_acl(broken_dir, owner_sid))
+        self.assertTrue(has_broken_appdata_acl(broken_dir, other_sid))
+
+        fix_appdata_acl(broken_dir)
+        self.assertFalse(has_broken_appdata_acl(broken_dir, other_sid))
+        self.assertFalse(has_broken_appdata_acl(cleaners_dir, other_sid))
+
+        # Child-only broken DACL is also detected and repaired
+        os.rmdir(cleaners_dir)
+        os.mkdir(cleaners_dir, 0o700)
+        self.assertTrue(has_broken_appdata_acl(broken_dir, other_sid))
+        fix_appdata_acl(broken_dir)
+        self.assertFalse(has_broken_appdata_acl(broken_dir, other_sid))
+
+        # Hard-linked files are neither checked nor repaired
+        outside_dir = os.path.join(self.tempdir, 'outside_options')
+        os.mkdir(outside_dir, 0o700)
+        outside_file = os.path.join(outside_dir, 'victim.txt')
+        self.write_file(outside_file, b'x')
+        os.link(outside_file, os.path.join(broken_dir, 'link.txt'))
+        self.assertFalse(has_broken_appdata_acl(broken_dir, other_sid))
+        fix_appdata_acl(broken_dir)
+        self.assertTrue(bleachbit.Windows._is_path_acl_broken(  # pylint: disable=protected-access
+            outside_file, other_sid))
+
+        # Non-existent path and portable mode
+        self.assertFalse(
+            has_broken_appdata_acl(os.path.join(parent, 'does_not_exist')))
+        with mock.patch('bleachbit.portable_mode', True):
+            self.assertFalse(has_broken_appdata_acl())
+
+    def test_fix_appdata_acl_continues_after_failure(self):
+        """A failure on one path does not prevent repairing the others"""
+        import win32security  # pylint: disable=import-outside-toplevel
+        other_sid = win32security.ConvertStringSidToSid('S-1-5-32-545')
+        parent = os.path.join(self.tempdir, 'appdata_partial')
+        os.mkdir(parent)
+        broken_dir = os.path.join(parent, 'BleachBit')
+        os.mkdir(broken_dir, 0o700)
+        cleaners_dir = os.path.join(broken_dir, 'cleaners')
+        os.mkdir(cleaners_dir, 0o700)
+        ini_file = os.path.join(broken_dir, 'bleachbit.ini')
+        self.write_file(ini_file, b'[bleachbit]\n')
+
+        real_set = win32security.SetNamedSecurityInfo
+
+        def flaky_set(target, *args, **kwargs):
+            if target == ini_file:
+                raise OSError('simulated failure')
+            return real_set(target, *args, **kwargs)
+
+        with mock.patch.object(win32security, 'SetNamedSecurityInfo',
+                               side_effect=flaky_set) as setter:
+            with self.assertRaises(OSError):
+                fix_appdata_acl(broken_dir)
+        attempted = [call.args[0] for call in setter.call_args_list]
+        # cleaners/ is yielded after the top-level files, so its presence
+        # proves iteration continued past the failing file.
+        self.assertIn(cleaners_dir, attempted)
+        self.assertFalse(has_broken_appdata_acl(cleaners_dir, other_sid))

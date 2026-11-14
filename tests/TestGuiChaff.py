@@ -1,0 +1,561 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2008-2026 Andrew Ziem.
+#
+# This work is licensed under the terms of the GNU GPL, version 3 or
+# later.  See the COPYING file in the top-level directory.
+
+
+"""
+Test case for module GuiChaff
+"""
+
+# These tests reach into internals on purpose.
+# pylint: disable=protected-access
+
+
+import errno
+import os
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import patch
+
+from tests import common
+from tests.common import pytest
+
+from bleachbit.GtkShim import Gtk, GLib, Gio, is_gtk_available
+from bleachbit.Options import options
+
+HAVE_GTK = is_gtk_available()
+if HAVE_GTK:
+    from bleachbit.GuiApplication import Bleachbit
+    from bleachbit.GuiChaff import (STOP_MODE_FILE_COUNT,
+                                    STOP_MODE_TOTAL_SIZE,
+                                    STOP_MODE_FREE_SPACE,
+                                    MAX_FILE_COUNT,
+                                    _make_should_stop,
+                                    _make_progress_cb,
+                                    make_files_thread)
+
+
+@unittest.skipUnless(HAVE_GTK, 'requires GTK+ module')
+@pytest.mark.xdist_group('gui')
+class GuiChaffTestCase(common.BleachbitTestCase):
+    """Test case for module GuiChaff"""
+    app = Bleachbit(auto_exit=False, uac=False) if HAVE_GTK else None
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # override, not set(): a plain set() is reverted by the per-test
+        # tearDown reload after the first test in the class
+        options.set_override('font_check_completed', True)
+
+        # Try to register the application, catch the error if already registered
+        glib_errors = []
+        try:
+            cls.app.register()
+            cls.app.hold()  # Keep application alive during tests
+            with common.capture_glib_exceptions() as errs:
+                cls.app.activate()
+                cls.refresh_gui()
+            glib_errors.extend(errs)
+        except GLib.GError as e:
+            if "already exported" not in str(e):
+                raise
+            # Application already registered, just hold it
+            cls.app.hold()
+            # Try to get the default application and activate it
+            default_app = Gio.Application.get_default()
+            if default_app:
+                with common.capture_glib_exceptions() as errs:
+                    default_app.activate()
+                    cls.refresh_gui()
+                glib_errors.extend(errs)
+        if glib_errors:
+            _exc_type, exc_value, exc_tb = glib_errors[0]
+            raise exc_value.with_traceback(exc_tb)
+        cls.refresh_gui()
+
+    @classmethod
+    def tearDownClass(cls):
+        """Close the GUI"""
+        super().tearDownClass()
+        # Destroy the visible window on whichever application holds it.
+        # When running after TestGUI, the default application is TestGUI's
+        # instance and cls.app is an unregistered duplicate, so check both.
+        for app in (cls.app, Gio.Application.get_default()):
+            if app and getattr(app, '_window', None):
+                app._window.destroy()
+                app._window = None
+
+    @classmethod
+    def refresh_gui(cls, delay=0):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(blocking=False)
+        time.sleep(delay)
+
+    def wait_until(self, condition, timeout=5):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.refresh_gui()
+            if condition():
+                return
+            time.sleep(0.01)
+        self.refresh_gui()
+        self.assertTrue(condition(), 'Timed out waiting for GUI worker')
+
+    def setUp(self):
+        """Set up test fixtures before each test method."""
+        super().setUp()
+        from bleachbit.GuiChaff import ChaffDialog
+        # Pass the GtkWindow object
+        self.dialog = ChaffDialog(parent=self.app._window)
+
+    def tearDown(self):
+        """Clean up test fixtures after each test method."""
+        super().tearDown()
+        self.dialog.destroy()
+
+    def test_dialog_creation(self):
+        """Test that dialog is created with expected widgets"""
+        self.assertIsNotNone(self.dialog)
+        # Test combo box
+        self.assertIsNotNone(self.dialog.inspiration_combo)
+        self.assertEqual(self.dialog.inspiration_combo.get_active(), 0)
+        # Test stop mode combo
+        self.assertIsNotNone(self.dialog.stop_mode_combo)
+        self.assertEqual(self.dialog.stop_mode_combo.get_active(), 0)
+        # Test stop value spinner
+        self.assertIsNotNone(self.dialog.stop_value_spin)
+        self.assertEqual(self.dialog.stop_value_spin.get_value_as_int(), 100)
+        # Test folder chooser
+        self.assertIsNotNone(self.dialog.choose_folder_button)
+        self.assertEqual(
+            self.dialog.choose_folder_button.get_filename(),
+            tempfile.gettempdir())
+
+    def test_combo_options(self):
+        """Test that combo box has correct options"""
+        expected_options = ('2600 Magazine', "Hillary Clinton's emails")
+        self.assertEqual(
+            self.dialog.inspiration_combo_options, expected_options)
+        for i, option in enumerate(expected_options):
+            self.dialog.inspiration_combo.set_active(i)
+            self.assertEqual(
+                self.dialog.inspiration_combo.get_active_text(),
+                option)
+
+    def test_stop_value_spinner_file_count(self):
+        """Test stop value spinner limits for file count mode"""
+        # pylint: disable-next=possibly-used-before-assignment
+        self.dialog.stop_mode_combo.set_active(STOP_MODE_FILE_COUNT)
+        self.dialog.stop_value_spin.set_value(1)
+        self.assertEqual(self.dialog.stop_value_spin.get_value_as_int(), 1)
+        # pylint: disable-next=possibly-used-before-assignment
+        self.dialog.stop_value_spin.set_value(MAX_FILE_COUNT)
+        self.assertEqual(
+            self.dialog.stop_value_spin.get_value_as_int(), MAX_FILE_COUNT)
+        # Test out of bounds values
+        self.dialog.stop_value_spin.set_value(0)
+        self.assertEqual(self.dialog.stop_value_spin.get_value_as_int(), 1)
+        self.dialog.stop_value_spin.set_value(MAX_FILE_COUNT + 1)
+        self.assertEqual(
+            self.dialog.stop_value_spin.get_value_as_int(), MAX_FILE_COUNT)
+
+    def test_stop_value_spinner_total_size(self):
+        """Test stop value spinner limits for total size mode"""
+        # pylint: disable-next=possibly-used-before-assignment
+        self.dialog.stop_mode_combo.set_active(STOP_MODE_TOTAL_SIZE)
+        self.dialog.stop_value_spin.set_value(1)
+        self.assertEqual(self.dialog.stop_value_spin.get_value_as_int(), 1)
+        self.dialog.stop_value_spin.set_value(999999)
+        self.assertEqual(
+            self.dialog.stop_value_spin.get_value_as_int(), 999999)
+
+    def test_stop_value_spinner_free_space(self):
+        """Test stop value spinner limits for free space mode"""
+        # pylint: disable-next=possibly-used-before-assignment
+        self.dialog.stop_mode_combo.set_active(STOP_MODE_FREE_SPACE)
+        self.dialog.stop_value_spin.set_value(1)
+        self.assertEqual(self.dialog.stop_value_spin.get_value_as_int(), 1)
+        self.dialog.stop_value_spin.set_value(99)
+        self.assertEqual(self.dialog.stop_value_spin.get_value_as_int(), 99)
+        # Test out of bounds
+        self.dialog.stop_value_spin.set_value(0)
+        self.assertEqual(self.dialog.stop_value_spin.get_value_as_int(), 1)
+        self.dialog.stop_value_spin.set_value(100)
+        self.assertEqual(self.dialog.stop_value_spin.get_value_as_int(), 99)
+
+    def test_stop_mode_changed(self):
+        """Test that changing stop mode updates the label and adjustment"""
+        self.dialog.stop_mode_combo.set_active(STOP_MODE_TOTAL_SIZE)
+        self.refresh_gui()
+        self.assertIn('MB', self.dialog.stop_value_label.get_text())
+
+        self.dialog.stop_mode_combo.set_active(STOP_MODE_FREE_SPACE)
+        self.refresh_gui()
+        self.assertIn('%', self.dialog.stop_value_label.get_text())
+
+        self.dialog.stop_mode_combo.set_active(STOP_MODE_FILE_COUNT)
+        self.refresh_gui()
+        self.assertIn('files', self.dialog.stop_value_label.get_text().lower())
+
+    @patch('bleachbit.GuiChaff.make_files_thread')
+    @patch('bleachbit.Chaff.download_models')
+    @patch('bleachbit.Chaff.have_models')
+    def test_make_files(self, mock_have_models, mock_download_models, mock_make_files):
+        """Test make files functionality with automatic download"""
+        # Set up mocks
+        mock_have_models.return_value = False  # Need to download models
+        mock_download_models.return_value = True
+
+        self.dialog.choose_folder_button.set_filename(self.tempdir)
+        self.dialog.stop_value_spin.set_value(10)
+        self.dialog.inspiration_combo.set_active(0)
+
+        # Simulate clicking make button
+        self.dialog.make_button.clicked()
+        self.wait_until(lambda: mock_make_files.called)
+
+        # Verify models were downloaded
+        mock_download_models.assert_called_once()
+
+        # Verify make_files_thread was called with correct arguments
+        mock_make_files.assert_called_once()
+        args = mock_make_files.call_args[0]
+        self.assertEqual(args[0], 0)   # stop_mode (file count)
+        self.assertEqual(args[1], 10)  # stop_value
+        self.assertEqual(args[2], 0)   # inspiration (2600)
+        self.assertEqual(args[3], self.tempdir)  # output_folder
+        self.assertIsInstance(args[6], threading.Event)  # abort_event
+
+    @patch('bleachbit.GuiChaff.make_files_thread')
+    @patch('bleachbit.Chaff.download_models')
+    @patch('bleachbit.Chaff.have_models')
+    def test_make_files_download_fails(self, mock_have_models, mock_download_models, mock_make_files):
+        """Test handling when download fails"""
+        mock_have_models.return_value = False  # Need to download models
+        mock_download_models.return_value = False  # Download fails
+
+        self.dialog.choose_folder_button.set_filename(self.tempdir)
+        self.dialog.stop_value_spin.set_value(10)
+        self.dialog.inspiration_combo.set_active(0)
+
+        # Simulate clicking make button
+        self.dialog.make_button.clicked()
+        self.wait_until(
+            lambda: not self.dialog._download_spinner_box.get_visible())
+
+        # Verify models download was attempted
+        mock_download_models.assert_called_once()
+
+        # Verify make_files_thread was NOT called because download failed
+        mock_make_files.assert_not_called()
+        self.assertTrue(self.dialog.make_button.get_sensitive())
+        self.assertTrue(self.dialog.infobar.get_visible())
+        self.assertEqual(
+            self.dialog.infobar.get_message_type(), Gtk.MessageType.ERROR)
+
+    @patch('bleachbit.GuiChaff.make_files_thread')
+    @patch('bleachbit.Chaff.download_models')
+    @patch('bleachbit.Chaff.have_models')
+    def test_make_files_download_raises(self, mock_have_models, mock_download_models, mock_make_files):
+        """An exception in the download worker still stops the spinner"""
+        mock_have_models.return_value = False
+
+        def delayed_download(**_kwargs):
+            time.sleep(0.3)
+            raise RuntimeError('unexpected')
+
+        mock_download_models.side_effect = delayed_download
+
+        self.dialog.choose_folder_button.set_filename(self.tempdir)
+        self.dialog.make_button.clicked()
+        # Let the worker finish, then run the idle callbacks it queues
+        self.wait_until(
+            lambda: not self.dialog._download_spinner_box.get_visible())
+
+        mock_download_models.assert_called_once()
+        mock_make_files.assert_not_called()
+        self.assertFalse(self.dialog._download_spinner_box.get_visible())
+        self.assertTrue(self.dialog.make_button.get_sensitive())
+        self.assertTrue(self.dialog.infobar.get_visible())
+        self.assertEqual(
+            self.dialog.infobar.get_message_type(), Gtk.MessageType.ERROR)
+
+    @patch('bleachbit.GuiChaff.make_files_thread')
+    @patch('bleachbit.Chaff.download_models')
+    @patch('bleachbit.Chaff.have_models')
+    def test_close_during_download(self, mock_have_models, mock_download_models, mock_make_files):
+        """Closing the dialog during the download must not make files afterwards"""
+        mock_have_models.return_value = False
+        release = threading.Event()
+        mock_download_models.side_effect = lambda **_kwargs: release.wait(10)
+
+        self.dialog.choose_folder_button.set_filename(self.tempdir)
+        self.dialog.make_button.clicked()
+        self.dialog._on_delete_event(self.dialog, None)
+        release.set()
+        # Let the worker finish, then run the idle callback it queues
+        self.wait_until(
+            lambda: not self.dialog._download_spinner_box.get_visible())
+
+        mock_download_models.assert_called_once()
+        mock_make_files.assert_not_called()
+        self.assertTrue(self.dialog._abort_event.is_set())
+        self.assertTrue(self.dialog.make_button.get_sensitive())
+
+    @patch('bleachbit.GuiChaff.make_files_thread')
+    @patch('bleachbit.Chaff.have_models')
+    def test_make_files_models_exist(self, mock_have_models, mock_make_files):
+        """Test making files when models already exist"""
+        mock_have_models.return_value = True  # Models already exist
+
+        self.dialog.choose_folder_button.set_filename(self.tempdir)
+        self.dialog.stop_value_spin.set_value(10)
+        self.dialog.inspiration_combo.set_active(0)
+
+        # Simulate clicking make button
+        self.dialog.make_button.clicked()
+        self.wait_until(lambda: mock_make_files.called)
+
+        # Verify make_files_thread was called with correct arguments
+        mock_make_files.assert_called_once()
+        self.assertIsInstance(mock_make_files.call_args, tuple)
+        args = mock_make_files.call_args[0]
+        self.assertEqual(args[0], 0)   # stop_mode (file count)
+        self.assertEqual(args[1], 10)  # stop_value
+        self.assertEqual(args[2], 0)   # inspiration (2600)
+        self.assertEqual(args[3], self.tempdir)  # output_folder
+        self.assertIsInstance(args[6], threading.Event)  # abort_event
+
+    def test_progress_cb_keyword_args(self):
+        """Regression test: _make_progress_cb must accept keyword args from Chaff.py
+
+        Chaff.py calls on_progress(fraction, generated_file_names=..., cumulative_size=...)
+        so the callbacks must accept those keyword names.
+        """
+
+        collected = []
+
+        def on_progress(fraction):
+            collected.append(fraction)
+
+        for stop_mode in (STOP_MODE_FILE_COUNT, STOP_MODE_TOTAL_SIZE, STOP_MODE_FREE_SPACE):
+            # pylint: disable-next=possibly-used-before-assignment
+            cb = _make_progress_cb(stop_mode, 100, self.tempdir, on_progress)
+            # Must accept keyword arguments as Chaff.py passes them
+            cb(0.5, generated_file_names=['/tmp/fake'], cumulative_size=12345)
+            self.assertEqual(len(collected), 1, f'stop_mode={stop_mode}')
+            collected.clear()
+
+    def test_should_stop_keyword_args(self):
+        """Regression test: _make_should_stop must accept keyword args from Chaff.py
+
+        Chaff.py calls should_stop(generated_file_names, cumulative_size=...)
+        so the callbacks must accept those parameter names.
+        """
+
+        abort_event = threading.Event()
+
+        for stop_mode in (STOP_MODE_FILE_COUNT, STOP_MODE_TOTAL_SIZE, STOP_MODE_FREE_SPACE):
+            # pylint: disable-next=possibly-used-before-assignment
+            should_stop, _file_count = _make_should_stop(
+                stop_mode, 100, self.tempdir, abort_event)
+            # Must accept keyword argument as Chaff.py passes it
+            result = should_stop(['/tmp/fake'], cumulative_size=12345)
+            self.assertIsInstance(result, bool)
+
+    @patch('bleachbit.GuiChaff.make_files_thread')
+    @patch('bleachbit.Chaff.have_models')
+    def test_abort_button(self, mock_have_models, mock_make_files):
+        """Test that abort button sets the abort event"""
+        mock_have_models.return_value = True
+
+        self.dialog.choose_folder_button.set_filename(self.tempdir)
+        self.dialog.stop_value_spin.set_value(10)
+        self.dialog.inspiration_combo.set_active(0)
+
+        # Initially, the abort button should be disabled.
+        self.assertFalse(self.dialog.abort_button.get_sensitive())
+
+        # Start generation
+        self.dialog.make_button.clicked()
+        self.wait_until(lambda: mock_make_files.called)
+        mock_make_files.assert_called_once()
+
+        # The abort button should now be enabled.
+        self.assertTrue(self.dialog.abort_button.get_sensitive())
+
+        # Click abort.
+        self.dialog.abort_button.clicked()
+        self.refresh_gui()
+
+        # Verify that the abort event was set.
+        abort_event = mock_make_files.call_args[0][6]
+        self.assertIsInstance(abort_event, threading.Event)
+        self.assertTrue(abort_event.is_set())
+
+    @patch('bleachbit.GuiChaff.make_files_thread')
+    @patch('bleachbit.Chaff.have_models')
+    def test_make_files_error(self, mock_have_models, mock_make_files):
+        """Test that error from make_files_thread shows in infobar"""
+        mock_have_models.return_value = True
+
+        self.dialog.choose_folder_button.set_filename(self.tempdir)
+        self.dialog.stop_value_spin.set_value(10)
+        self.dialog.inspiration_combo.set_active(0)
+
+        self.dialog.make_button.clicked()
+        self.wait_until(lambda: mock_make_files.called)
+        mock_make_files.assert_called_once()
+
+        # Get the on_progress callback passed to the thread
+        on_progress = mock_make_files.call_args[0][5]
+        on_progress(1.0, msg=None, is_done=True, error='Test error')
+        self.wait_until(self.dialog.infobar.get_visible)
+
+        self.assertTrue(self.dialog.infobar.get_visible())
+        self.assertIn('Test error', self.dialog.infobar_label.get_text())
+        self.assertEqual(
+            self.dialog.infobar.get_message_type(), Gtk.MessageType.ERROR)
+        self.assertFalse(self.dialog.progressbar.get_visible())
+        self.assertFalse(self.dialog.abort_button.get_sensitive())
+        self.assertTrue(self.dialog.make_button.get_sensitive())
+
+    def test_make_files_thread_error_deletes(self):
+        """Files made before a generation error are still deleted when finished"""
+        output_dir = self.mkdtemp()
+
+        def fake_generate_2600(*_args, generated_file_names, **_kwargs):
+            for _i in range(3):
+                generated_file_names.append(self.mkstemp(dir=output_dir))
+            raise OSError(errno.ENOSPC, 'No space left on device')
+
+        progress_kwargs = []
+
+        def on_progress(_fraction, **kwargs):
+            progress_kwargs.append(kwargs)
+
+        with patch('bleachbit.GuiChaff.generate_2600', side_effect=fake_generate_2600):
+            # pylint: disable-next=possibly-used-before-assignment
+            make_files_thread(STOP_MODE_FILE_COUNT, 10, 0, output_dir, True,
+                              on_progress, threading.Event())
+        self.assertEqual(os.listdir(output_dir), [])
+        self.assertTrue(progress_kwargs[-1]['is_done'])
+        self.assertIn('No space left on device', progress_kwargs[-1]['error'])
+
+    def test_make_files_thread_abort_deletes(self):
+        """Abort stops the generation, and the files are still deleted"""
+        output_dir = self.mkdtemp()
+        abort_event = threading.Event()
+        stop_results = []
+
+        def fake_generate_2600(*_args, should_stop, generated_file_names, **_kwargs):
+            for _i in range(3):
+                generated_file_names.append(self.mkstemp(dir=output_dir))
+            abort_event.set()
+            stop_results.append(should_stop(generated_file_names, 0))
+
+        with patch('bleachbit.GuiChaff.generate_2600', side_effect=fake_generate_2600):
+            # pylint: disable-next=possibly-used-before-assignment
+            make_files_thread(STOP_MODE_FILE_COUNT, 10, 0, output_dir, True,
+                              lambda *_args, **_kwargs: None, abort_event)
+        self.assertEqual(stop_results, [True])
+        self.assertEqual(os.listdir(output_dir), [])
+
+    def test_make_files_thread_missing_file_deletes_rest(self):
+        """An already removed file must not prevent cleanup of the other files"""
+        output_dir = self.mkdtemp()
+        progress_kwargs = []
+
+        def fake_generate(*_args, generated_file_names, **_kwargs):
+            for _i in range(3):
+                generated_file_names.append(self.mkstemp(dir=output_dir))
+            os.unlink(generated_file_names[0])
+
+        for inspiration, generator in enumerate(('generate_2600', 'generate_emails')):
+            with self.subTest(inspiration=inspiration), \
+                    patch(f'bleachbit.GuiChaff.{generator}', side_effect=fake_generate):
+                make_files_thread(
+                    STOP_MODE_FILE_COUNT, 3, inspiration, output_dir, True,
+                    lambda _fraction, **kwargs: progress_kwargs.append(kwargs),
+                    threading.Event())
+                self.assertEqual(os.listdir(output_dir), [])
+                self.assertTrue(progress_kwargs[-1]['is_done'])
+                self.assertIsNone(progress_kwargs[-1]['error'])
+
+    def test_make_files_thread_cleanup_error_continues(self):
+        """Cleanup continues after an unlink failure and reports both errors"""
+        output_dir = self.mkdtemp()
+        generated_paths = []
+        progress_kwargs = []
+        real_unlink = os.unlink
+
+        def fake_generate(*_args, generated_file_names, **_kwargs):
+            for _i in range(3):
+                generated_file_names.append(self.mkstemp(dir=output_dir))
+            generated_paths.extend(generated_file_names)
+            raise OSError(errno.ENOSPC, 'No space left on device')
+
+        def fail_first_unlink(fn):
+            if fn == generated_paths[0]:
+                raise PermissionError(errno.EACCES, 'Permission denied', fn)
+            real_unlink(fn)
+
+        with patch('bleachbit.GuiChaff.generate_2600', side_effect=fake_generate), \
+                patch('bleachbit.GuiChaff.os.unlink', side_effect=fail_first_unlink):
+            make_files_thread(
+                STOP_MODE_FILE_COUNT, 3, 0, output_dir, True,
+                lambda _fraction, **kwargs: progress_kwargs.append(kwargs),
+                threading.Event())
+        self.assertEqual(os.listdir(output_dir), [
+                         os.path.basename(generated_paths[0])])
+        self.assertTrue(progress_kwargs[-1]['is_done'])
+        self.assertIn('No space left on device', progress_kwargs[-1]['error'])
+        self.assertIn('Permission denied', progress_kwargs[-1]['error'])
+
+    @common.skipUnlessWindows
+    def test_make_files_thread_locked_file_deletes_rest(self):
+        """A native Windows delete lock must not stop cleanup of other files"""
+        def check_cleanup(inspiration, generator, outcome):
+            output_dir = self.mkdtemp()
+            generated_paths = [self.mkstemp(
+                dir=output_dir) for _i in range(3)]
+            abort_event = threading.Event()
+            progress_kwargs = []
+
+            def fake_generate(*_args, generated_file_names, **_kwargs):
+                generated_file_names.extend(generated_paths)
+                if outcome == 'abort':
+                    abort_event.set()
+                elif outcome == 'error':
+                    raise OSError(errno.ENOSPC, 'No space left on device')
+
+            # Windows open() shares read/write access, but not delete access.
+            with open(generated_paths[0], 'rb'):
+                with self.assertRaises(PermissionError) as locked_error:
+                    os.unlink(generated_paths[0])
+                self.assertEqual(locked_error.exception.winerror, 32)
+                with patch(f'bleachbit.GuiChaff.{generator}', side_effect=fake_generate), \
+                        self.assertLogs('bleachbit.GuiChaff', level='ERROR'):
+                    make_files_thread(
+                        STOP_MODE_FILE_COUNT, 3, inspiration, output_dir, True,
+                        lambda _fraction, **kwargs: progress_kwargs.append(
+                            kwargs),
+                        abort_event)
+                self.assertEqual(os.listdir(output_dir), [
+                                 os.path.basename(generated_paths[0])])
+                self.assertTrue(progress_kwargs[-1]['is_done'])
+                self.assertIn(str(locked_error.exception),
+                              progress_kwargs[-1]['error'])
+                if outcome == 'error':
+                    self.assertIn('No space left on device',
+                                  progress_kwargs[-1]['error'])
+
+        for inspiration, generator in enumerate(('generate_2600', 'generate_emails')):
+            for outcome in ('complete', 'abort', 'error'):
+                with self.subTest(inspiration=inspiration, outcome=outcome):
+                    check_cleanup(inspiration, generator, outcome)

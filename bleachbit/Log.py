@@ -1,7 +1,7 @@
 # vim: ts=4:sw=4:expandtab
 
 # BleachBit
-# Copyright (C) 2008-2020 Andrew Ziem
+# Copyright (C) 2008-2025 Andrew Ziem
 # https://www.bleachbit.org
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,7 +15,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
 """
@@ -23,27 +23,41 @@ Logging
 """
 
 import logging
+import os
+import sys
 
 
 def is_debugging_enabled_via_cli():
     """Return boolean whether user required debugging on the command line"""
-    import sys
+    if 'unittest' in sys.modules:
+        return True
+    if os.getenv('BLEACHBIT_DEBUG') in ('1', 'true', 'True'):
+        # Set by the parent process when launching a child (e.g. the
+        # memory-wiping child via systemd-run) so that the child inherits
+        # the parent's --debug state, which sys.argv alone would not
+        # reflect because the child is launched with python -c.
+        return True
     return any(arg.startswith('--debug') for arg in sys.argv)
 
 
-class DelayLog(object):
+class DelayLog:
     def __init__(self):
         self.queue = []
         self.msg = ''
+        self.drained = False
 
     def read(self):
-        for msg in self.queue:
-            yield msg
+        yield from self.queue
         self.queue = []
+        # The GUI reads once and then shows log records itself, but the
+        # console handler keeps writing here.
+        self.drained = True
 
     def write(self, msg):
+        if self.drained:
+            return
         self.msg += msg
-        if self.msg[-1] == '\n':
+        if self.msg and self.msg[-1] == '\n':
             self.queue.append(self.msg)
             self.msg = ''
 
@@ -54,14 +68,13 @@ def init_log():
     This is one of the first steps in __init___
     """
     logger = logging.getLogger('bleachbit')
-    import sys
     # On Microsoft Windows when running frozen without the console,
     # avoid py2exe redirecting stderr to bleachbit.exe.log by not
     # writing to stderr because py2exe redirects stderr to a file.
     #
     # sys.frozen = 'console_exe' means the console is shown, which
     # does not require special handling.
-    if hasattr(sys, 'frozen') and sys.frozen == 'windows_exe':
+    if hasattr(sys, 'frozen') and sys.frozen == 'windows_exe':  # pylint: disable=no-member
         sys.stderr = DelayLog()
 
     # debug if command line asks for it or if this a non-final release
@@ -70,20 +83,60 @@ def init_log():
     else:
         logger.setLevel(logging.INFO)
     logger_sh = logging.StreamHandler()
+    console_formatter = logging.Formatter('%(message)s')
+    logger_sh.setFormatter(console_formatter)
     logger.addHandler(logger_sh)
+
+    # If --debug-log parameter was passed, set up the file handler here instead
+    # of in CLI.py, so logs are captured from the very beginning.
+    debug_log_path = None
+    for i, arg in enumerate(sys.argv):
+        # --debug-log /path/file format (space delimited)
+        if arg == '--debug-log' and i + 1 < len(sys.argv):
+            debug_log_path = sys.argv[i + 1]
+            break
+        # --debug-log=/path/file format (delimited with equals sign)
+        if arg.startswith('--debug-log='):
+            debug_log_path = arg.split('=', 1)[1]
+            break
+
+    if debug_log_path:
+        try:
+            if os.name != 'nt' and not os.path.exists(debug_log_path):
+                # This log may contain sensitive system info (paths, username),
+                # so keep it from being created world-readable.
+                fd = os.open(debug_log_path,
+                             os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                os.close(fd)
+            file_handler = logging.FileHandler(
+                debug_log_path, encoding='utf-8')
+        except OSError as e:
+            logger.error('Cannot open debug log: %s', e)
+            return logger
+        # Keep lines with undecodable paths. FileHandler takes no errors
+        # argument before Python 3.9.
+        file_handler.stream.reconfigure(errors='backslashreplace')
+        # Always use DEBUG level for log file.
+        file_handler.setLevel(logging.DEBUG)
+        # removed: %(name)s
+        file_formatter = logging.Formatter(
+            '%(asctime)s -  %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+        logger.debug('Debug log file initialized at %s', debug_log_path)
+
     return logger
 
 
-def set_root_log_level():
+def set_root_log_level(is_debug=False):
     """Adjust the root log level
 
     This runs later in the application's startup process when the
     configuration is loaded or after a change via the GUI.
     """
-    from bleachbit.Options import options
-    is_debug = options.get('debug')
     root_logger = logging.getLogger('bleachbit')
-    root_logger.setLevel(logging.DEBUG if is_debug else logging.INFO)
+    is_debug_effective = is_debug or is_debugging_enabled_via_cli()
+    root_logger.setLevel(logging.DEBUG if is_debug_effective else logging.INFO)
 
 
 class GtkLoggerHandler(logging.Handler):
@@ -96,7 +149,7 @@ class GtkLoggerHandler(logging.Handler):
     def update_log_level(self):
         """Set the log level"""
         from bleachbit.Options import options
-        if options.get('debug'):
+        if is_debugging_enabled_via_cli() or options.get('debug'):
             self.min_level = logging.DEBUG
         else:
             self.min_level = logging.WARNING
@@ -112,7 +165,7 @@ class GtkLoggerHandler(logging.Handler):
 
     def write(self, msg):
         self.msg += msg
-        if self.msg[-1] == '\n':
+        if self.msg and self.msg[-1] == '\n':
             tag = None
-            self.append_text(msg, tag)
+            self.append_text(self.msg, tag)
             self.msg = ''
